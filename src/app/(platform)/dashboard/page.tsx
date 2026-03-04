@@ -1,72 +1,25 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { Plus, TrendingUp, MessageSquare, Eye, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
-import { formatNumber, getInitials } from '@/lib/utils';
-
-// Mock data
-async function getAuthorAnalytics() {
-  return {
-    totalReads: 45230,
-    totalChats: 12340,
-    totalMessages: 34567,
-    readsTrend: 12, // percentage
-    chatsTrend: 8,
-    messagesTrend: 15,
-  };
-}
-
-async function getAuthorBooks(authorId: string) {
-  return [
-    {
-      id: '1',
-      title: 'The Decline and Fall of the Roman Empire',
-      published: '2024-01-15',
-      reads: 12540,
-      chats: 3421,
-      messages: 8234,
-    },
-  ];
-}
-
-async function getRecentConversations() {
-  return [
-    {
-      id: '1',
-      bookTitle: 'The Decline and Fall of the Roman Empire',
-      userName: 'Alex Johnson',
-      message: 'What were the main causes of Rome\'s decline?',
-      timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000),
-    },
-    {
-      id: '2',
-      bookTitle: 'The Decline and Fall of the Roman Empire',
-      userName: 'Sarah Chen',
-      message: 'How did Christianity affect the empire?',
-      timestamp: new Date(Date.now() - 4 * 60 * 60 * 1000),
-    },
-    {
-      id: '3',
-      bookTitle: 'The Decline and Fall of the Roman Empire',
-      userName: 'Marcus Rivera',
-      message: 'Explain the role of barbarian invasions',
-      timestamp: new Date(Date.now() - 6 * 60 * 60 * 1000),
-    },
-  ];
-}
+import { formatNumber } from '@/lib/utils';
+import {
+  getCurrentUser,
+  getCurrentAuthor,
+  getAuthorDashboardBooks,
+  getAuthorRecentConversations,
+} from '@/lib/db/queries';
+import { AuthorOnboarding } from './author-onboarding';
 
 function StatCard({
   label,
   value,
-  trend,
   icon: Icon,
   color,
 }: {
   label: string;
   value: string;
-  trend: number;
   icon: React.ReactNode;
   color: string;
 }) {
@@ -76,10 +29,6 @@ function StatCard({
         <div>
           <p className="text-sm text-zinc-500">{label}</p>
           <p className="mt-2 text-3xl font-bold text-white">{value}</p>
-          <p className="mt-2 flex items-center gap-1 text-sm text-emerald-400">
-            <TrendingUp className="h-4 w-4" />
-            {trend}% this month
-          </p>
         </div>
         <div className={`rounded-lg p-3 ${color}`}>
           {Icon}
@@ -90,11 +39,27 @@ function StatCard({
 }
 
 export default async function DashboardPage() {
-  const [analytics, books, conversations] = await Promise.all([
-    getAuthorAnalytics(),
-    getAuthorBooks('a1'),
-    getRecentConversations(),
+  const user = await getCurrentUser();
+
+  if (!user) {
+    redirect('/login?redirect=/dashboard');
+  }
+
+  const author = await getCurrentAuthor();
+
+  // Logged in but not an author yet — show onboarding
+  if (!author) {
+    const defaultName = user.user_metadata?.full_name || user.email?.split('@')[0] || '';
+    return <AuthorOnboarding defaultName={defaultName} />;
+  }
+
+  const [books, conversations] = await Promise.all([
+    getAuthorDashboardBooks(author.id),
+    getAuthorRecentConversations(author.id),
   ]);
+
+  const totalReads = books.reduce((sum, b) => sum + (b.total_reads || 0), 0);
+  const totalChats = books.reduce((sum, b) => sum + (b.total_chats || 0), 0);
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] px-4 py-8 sm:px-6 lg:px-8">
@@ -121,23 +86,20 @@ export default async function DashboardPage() {
         <div className="mb-12 grid gap-6 md:grid-cols-3">
           <StatCard
             label="Total Reads"
-            value={formatNumber(analytics.totalReads)}
-            trend={analytics.readsTrend}
+            value={formatNumber(totalReads)}
             icon={<Eye className="h-6 w-6 text-white" />}
             color="bg-blue-500/10"
           />
           <StatCard
             label="Total Conversations"
-            value={formatNumber(analytics.totalChats)}
-            trend={analytics.chatsTrend}
+            value={formatNumber(totalChats)}
             icon={<MessageSquare className="h-6 w-6 text-white" />}
             color="bg-violet-500/10"
           />
           <StatCard
-            label="Total Messages"
-            value={formatNumber(analytics.totalMessages)}
-            trend={analytics.messagesTrend}
-            icon={<MessageSquare className="h-6 w-6 text-white" />}
+            label="Published Books"
+            value={String(books.length)}
+            icon={<TrendingUp className="h-6 w-6 text-white" />}
             color="bg-pink-500/10"
           />
         </div>
@@ -160,22 +122,24 @@ export default async function DashboardPage() {
                       <h3 className="font-semibold text-white">
                         {book.title}
                       </h3>
-                      <p className="mt-2 text-sm text-zinc-500">
-                        Published {new Date(book.published).toLocaleDateString()}
-                      </p>
+                      {book.published_date && (
+                        <p className="mt-2 text-sm text-zinc-500">
+                          Published {new Date(book.published_date).toLocaleDateString()}
+                        </p>
+                      )}
                     </div>
 
                     <div className="flex w-full gap-4 sm:w-auto">
                       <div className="text-right">
                         <p className="text-sm text-zinc-500">Reads</p>
                         <p className="text-lg font-semibold text-white">
-                          {formatNumber(book.reads)}
+                          {formatNumber(book.total_reads || 0)}
                         </p>
                       </div>
                       <div className="text-right">
                         <p className="text-sm text-zinc-500">Chats</p>
                         <p className="text-lg font-semibold text-white">
-                          {formatNumber(book.chats)}
+                          {formatNumber(book.total_chats || 0)}
                         </p>
                       </div>
                     </div>
@@ -196,7 +160,7 @@ export default async function DashboardPage() {
           ) : (
             <Card className="border-[#27272a] bg-[#141414] py-12 text-center">
               <p className="mb-4 text-zinc-400">
-                You haven't published any books yet.
+                You haven&apos;t published any books yet.
               </p>
               <Link href="/dashboard/new-book">
                 <Button className="bg-violet-500 hover:bg-violet-600 text-white">
@@ -222,25 +186,17 @@ export default async function DashboardPage() {
                 >
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <Avatar className="h-6 w-6">
-                          <AvatarFallback className="text-xs">
-                            {getInitials(conv.userName)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <p className="font-medium text-white">
-                          {conv.userName}
-                        </p>
-                      </div>
-                      <p className="mt-2 text-sm text-zinc-300">
-                        {conv.message}
+                      <p className="font-medium text-white">
+                        {conv.title}
                       </p>
                       <p className="mt-1 text-xs text-zinc-600">
                         About: <span className="text-zinc-400">{conv.bookTitle}</span>
+                        {' · '}
+                        {conv.message_count} message{conv.message_count !== 1 ? 's' : ''}
                       </p>
                     </div>
                     <p className="text-xs text-zinc-600 whitespace-nowrap">
-                      {new Date(conv.timestamp).toLocaleString()}
+                      {new Date(conv.updated_at).toLocaleString()}
                     </p>
                   </div>
                 </Card>

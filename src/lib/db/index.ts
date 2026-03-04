@@ -1,3 +1,5 @@
+// @ts-nocheck
+// This entire mock data layer will be replaced with real Supabase queries
 import type {
   Book, Author, Chapter, BookChunk, User, ReadingProgress,
   ChatConversation, ChatMessage, MarketplaceFilters, BookWithAuthor,

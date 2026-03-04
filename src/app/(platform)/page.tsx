@@ -5,87 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { BookCard } from '@/components/book/book-card';
 import { Skeleton } from '@/components/ui/skeleton';
-
-// Mock data functions (replace with actual DB calls)
-async function getFeaturedBooks() {
-  // This would call: import { getFeaturedBooks } from '@/lib/db';
-  return [
-    {
-      id: '1',
-      title: 'The Decline and Fall of the Roman Empire',
-      description: 'A monumental historical work examining the collapse of Rome',
-      author: { id: 'a1', name: 'Edward Gibbon', avatar: null },
-      category: 'History',
-      price: 0,
-      reads: 12540,
-      chats: 3421,
-    },
-    {
-      id: '2',
-      title: 'A Brief History of Time',
-      description: 'From the Big Bang to Black Holes',
-      author: { id: 'a2', name: 'Stephen Hawking', avatar: null },
-      category: 'Science',
-      price: 0,
-      reads: 8932,
-      chats: 2156,
-    },
-    {
-      id: '3',
-      title: 'Thinking, Fast and Slow',
-      description: 'Insights into the psychology of decision-making',
-      author: { id: 'a3', name: 'Daniel Kahneman', avatar: null },
-      category: 'Psychology',
-      price: 14.99,
-      reads: 15234,
-      chats: 4567,
-    },
-    {
-      id: '4',
-      title: 'The Origins of Species',
-      description: 'The foundation of evolutionary theory',
-      author: { id: 'a4', name: 'Charles Darwin', avatar: null },
-      category: 'Science',
-      price: 0,
-      reads: 7654,
-      chats: 1899,
-    },
-    {
-      id: '5',
-      title: 'Sapiens',
-      description: 'A brief history of humankind',
-      author: { id: 'a5', name: 'Yuval Noah Harari', avatar: null },
-      category: 'History',
-      price: 18.99,
-      reads: 18765,
-      chats: 5432,
-    },
-    {
-      id: '6',
-      title: 'The Wealth of Nations',
-      description: 'An inquiry into the nature and causes',
-      author: { id: 'a6', name: 'Adam Smith', avatar: null },
-      category: 'Economics',
-      price: 12.99,
-      reads: 6543,
-      chats: 1234,
-    },
-  ];
-}
-
-async function getCategories() {
-  // This would call: import { getCategories } from '@/lib/db';
-  return [
-    { id: 'history', name: 'History' },
-    { id: 'science', name: 'Science' },
-    { id: 'psychology', name: 'Psychology' },
-    { id: 'philosophy', name: 'Philosophy' },
-    { id: 'economics', name: 'Economics' },
-    { id: 'biography', name: 'Biography' },
-    { id: 'fiction', name: 'Fiction' },
-    { id: 'technology', name: 'Technology' },
-  ];
-}
+import { getFeaturedBooks, getCategories } from '@/lib/db/queries';
 
 function BookCardSkeleton() {
   return (
@@ -98,16 +18,32 @@ function BookCardSkeleton() {
 }
 
 export default async function HomePage() {
-  const [featuredBooks, categories] = await Promise.all([
+  const [featuredBooksRaw, categories] = await Promise.all([
     getFeaturedBooks(),
     getCategories(),
   ]);
+
+  // Map DB shape to BookCard's expected shape
+  const featuredBooks = featuredBooksRaw.map((b) => ({
+    id: b.id,
+    title: b.title,
+    description: b.description || undefined,
+    cover: b.cover_url || undefined,
+    author: {
+      id: b.authors.id,
+      name: b.authors.display_name,
+      avatar: b.authors.avatar_url,
+    },
+    category: b.category,
+    price: Number(b.price),
+    reads: b.total_reads,
+    chats: b.total_chats,
+  }));
 
   return (
     <div className="bg-[#0a0a0a]">
       {/* Hero Section */}
       <section className="relative overflow-hidden px-4 py-20 sm:px-6 lg:px-8">
-        {/* Animated Gradient Orb Background */}
         <div className="absolute inset-0 -z-10 overflow-hidden">
           <div className="absolute -left-40 -top-40 h-80 w-80 rounded-full bg-gradient-to-br from-violet-500/20 to-purple-500/10 blur-3xl" />
           <div className="absolute -right-40 -bottom-40 h-80 w-80 rounded-full bg-gradient-to-bl from-blue-500/20 to-cyan-500/10 blur-3xl" />
@@ -135,7 +71,7 @@ export default async function HomePage() {
                 <ArrowRight className="ml-2 h-5 w-5" />
               </Button>
             </Link>
-            <Link href="/author/dashboard">
+            <Link href="/dashboard">
               <Button
                 size="lg"
                 variant="outline"
@@ -164,9 +100,15 @@ export default async function HomePage() {
             <Suspense fallback={Array.from({ length: 6 }).map((_, i) => (
               <BookCardSkeleton key={i} />
             ))}>
-              {featuredBooks.map((book) => (
-                <BookCard key={book.id} book={book} />
-              ))}
+              {featuredBooks.length > 0 ? (
+                featuredBooks.map((book) => (
+                  <BookCard key={book.id} book={book} />
+                ))
+              ) : (
+                <p className="col-span-full text-center text-zinc-500">
+                  No featured books yet. Be the first to publish!
+                </p>
+              )}
             </Suspense>
           </div>
 
@@ -192,7 +134,7 @@ export default async function HomePage() {
             {categories.map((category) => (
               <Link
                 key={category.id}
-                href={`/marketplace?category=${category.id}`}
+                href={`/marketplace?category=${encodeURIComponent(category.name)}`}
                 className="shrink-0"
               >
                 <Badge

@@ -13,7 +13,7 @@ interface BookWithAuthor {
   author: {
     id: string;
     name: string;
-    avatar?: string;
+    avatar?: string | null;
   };
   category?: string;
   price?: number;
@@ -75,7 +75,7 @@ export function BookCard({ book }: BookCardProps) {
           {/* Author */}
           <div className="flex items-center gap-2">
             <Avatar className="h-8 w-8">
-              <AvatarImage src={book.author.avatar} />
+              <AvatarImage src={book.author.avatar ?? undefined} />
               <AvatarFallback className="text-xs">
                 {getInitials(book.author.name)}
               </AvatarFallback>

@@ -19,7 +19,7 @@ export interface AvatarProps extends React.HTMLAttributes<HTMLDivElement> {
 
 const Avatar = React.forwardRef<HTMLDivElement, AvatarProps>(
   (
-    { className, src, alt = "Avatar", name, size = "default", ...props },
+    { className, src, alt = "Avatar", name, size = "default", children, ...props },
     ref
   ) => {
     const sizeStyles = {
@@ -30,6 +30,23 @@ const Avatar = React.forwardRef<HTMLDivElement, AvatarProps>(
     };
 
     const initials = name ? getInitials(name) : "?";
+
+    // If children are provided (composition pattern), render them
+    if (children) {
+      return (
+        <div
+          ref={ref}
+          className={cn(
+            "relative inline-flex items-center justify-center overflow-hidden rounded-full bg-[#27272a] font-semibold text-[#fafafa] ring-2 ring-[#27272a]",
+            sizeStyles[size],
+            className
+          )}
+          {...props}
+        >
+          {children}
+        </div>
+      );
+    }
 
     return (
       <div
@@ -59,4 +76,42 @@ const Avatar = React.forwardRef<HTMLDivElement, AvatarProps>(
 
 Avatar.displayName = "Avatar";
 
-export { Avatar, getInitials };
+// Composition sub-components for compatibility with shadcn-style usage
+const AvatarImage = React.forwardRef<
+  HTMLImageElement,
+  React.ImgHTMLAttributes<HTMLImageElement>
+>(({ className, src, alt = "Avatar", ...props }, ref) => {
+  if (!src) return null;
+  return (
+    <Image
+      ref={ref as React.Ref<HTMLImageElement>}
+      src={src}
+      alt={alt}
+      className={cn("h-full w-full object-cover", className)}
+      fill
+      sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+      {...(props as any)}
+    />
+  );
+});
+
+AvatarImage.displayName = "AvatarImage";
+
+const AvatarFallback = React.forwardRef<
+  HTMLSpanElement,
+  React.HTMLAttributes<HTMLSpanElement>
+>(({ className, children, ...props }, ref) => {
+  return (
+    <span
+      ref={ref}
+      className={cn("flex h-full w-full items-center justify-center", className)}
+      {...props}
+    >
+      {children}
+    </span>
+  );
+});
+
+AvatarFallback.displayName = "AvatarFallback";
+
+export { Avatar, AvatarImage, AvatarFallback, getInitials };

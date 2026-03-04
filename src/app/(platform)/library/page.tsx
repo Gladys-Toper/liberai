@@ -4,42 +4,27 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
-import { getInitials, formatNumber } from '@/lib/utils';
-
-// Mock data
-async function getUserLibrary() {
-  return [
-    {
-      id: '1',
-      title: 'The Decline and Fall of the Roman Empire',
-      author: { id: 'a1', name: 'Edward Gibbon', avatar: null },
-      progress: 65,
-      lastRead: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000), // 2 days ago
-    },
-    {
-      id: '2',
-      title: 'Thinking, Fast and Slow',
-      author: { id: 'a3', name: 'Daniel Kahneman', avatar: null },
-      progress: 42,
-      lastRead: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000), // 5 days ago
-    },
-    {
-      id: '5',
-      title: 'Sapiens',
-      author: { id: 'a5', name: 'Yuval Noah Harari', avatar: null },
-      progress: 88,
-      lastRead: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000), // 1 day ago
-    },
-  ];
-}
+import { getInitials } from '@/lib/utils';
+import { getUserLibrary } from '@/lib/db/queries';
 
 export default async function LibraryPage() {
-  const books = await getUserLibrary();
+  const libraryRaw = await getUserLibrary();
+
+  const books = libraryRaw.map((entry) => ({
+    id: entry.books.id,
+    title: entry.books.title,
+    author: {
+      id: entry.books.authors.id,
+      name: entry.books.authors.display_name,
+      avatar: entry.books.authors.avatar_url,
+    },
+    progress: entry.progress_percent,
+    lastRead: entry.last_read_at ? new Date(entry.last_read_at) : new Date(),
+  }));
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] px-4 py-8 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl">
-        {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-white sm:text-4xl">
             My Library
@@ -51,7 +36,6 @@ export default async function LibraryPage() {
 
         {books.length > 0 ? (
           <>
-            {/* Reading Now Section */}
             <div className="mb-12">
               <h2 className="mb-6 text-xl font-semibold text-white">
                 Currently Reading
@@ -71,14 +55,13 @@ export default async function LibraryPage() {
                     </div>
 
                     <div className="p-4 space-y-4">
-                      {/* Title and Author */}
                       <div>
                         <h3 className="line-clamp-2 font-semibold text-white mb-2">
                           {book.title}
                         </h3>
                         <div className="flex items-center gap-2">
                           <Avatar className="h-6 w-6">
-                            <AvatarImage src={book.author.avatar} />
+                            <AvatarImage src={book.author.avatar ?? undefined} />
                             <AvatarFallback className="text-xs">
                               {getInitials(book.author.name)}
                             </AvatarFallback>
@@ -89,12 +72,9 @@ export default async function LibraryPage() {
                         </div>
                       </div>
 
-                      {/* Progress */}
                       <div>
                         <div className="mb-2 flex items-center justify-between">
-                          <p className="text-sm text-zinc-400">
-                            Progress
-                          </p>
+                          <p className="text-sm text-zinc-400">Progress</p>
                           <p className="text-sm font-semibold text-violet-400">
                             {book.progress}%
                           </p>
@@ -102,17 +82,13 @@ export default async function LibraryPage() {
                         <Progress value={book.progress} className="h-2" />
                       </div>
 
-                      {/* Continue Reading Button */}
                       <Link href={`/book/${book.id}/read`}>
-                        <Button
-                          className="w-full bg-violet-500 hover:bg-violet-600 text-white"
-                        >
+                        <Button className="w-full bg-violet-500 hover:bg-violet-600 text-white">
                           Continue Reading
                           <ArrowRight className="ml-2 h-4 w-4" />
                         </Button>
                       </Link>
 
-                      {/* Chat Button */}
                       <Link href={`/book/${book.id}/chat`}>
                         <Button
                           variant="outline"
@@ -127,7 +103,6 @@ export default async function LibraryPage() {
               </div>
             </div>
 
-            {/* Explore More CTA */}
             <div className="rounded-lg border border-[#27272a] bg-[#141414] p-8 text-center">
               <h3 className="mb-3 text-xl font-semibold text-white">
                 Discover More Books

@@ -1,26 +1,61 @@
-'use client';
+'use client'
 
-import { useState } from 'react';
-import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { BookOpen, Search, Menu, X, ChevronDown } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
-import { cn } from '@/lib/utils';
+import { useState, useEffect } from 'react'
+import Link from 'next/link'
+import { usePathname, useRouter } from 'next/navigation'
+import { BookOpen, Search, Menu, X, ChevronDown, LogOut, User, LayoutDashboard } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Avatar } from '@/components/ui/avatar'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu'
+import { cn } from '@/lib/utils'
+import { createClient } from '@/lib/db/supabase-browser'
+import type { User as SupabaseUser } from '@supabase/supabase-js'
 
 export function Header() {
-  const pathname = usePathname();
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [searchExpanded, setSearchExpanded] = useState(false);
+  const pathname = usePathname()
+  const router = useRouter()
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [searchExpanded, setSearchExpanded] = useState(false)
+  const [user, setUser] = useState<SupabaseUser | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const supabase = createClient()
+
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      setUser(user)
+      setLoading(false)
+    })
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
+
+  async function handleSignOut() {
+    const supabase = createClient()
+    await supabase.auth.signOut()
+    router.push('/')
+    router.refresh()
+  }
 
   const navLinks = [
-    { href: '/marketplace', label: 'Explore', icon: null },
-    { href: '/library', label: 'Library', icon: null },
-    { href: '/author/dashboard', label: 'For Authors', icon: null },
-  ];
+    { href: '/marketplace', label: 'Explore' },
+    { href: '/library', label: 'Library' },
+    { href: '/dashboard', label: 'For Authors' },
+  ]
 
-  const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/');
+  const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/')
 
   return (
     <header className="sticky top-0 z-50 border-b border-[#27272a] bg-[#0a0a0a]/80 backdrop-blur-md">
@@ -77,14 +112,60 @@ export function Header() {
               <Search className="h-5 w-5" />
             </button>
 
-            {/* User Avatar Dropdown */}
-            <div className="hidden items-center gap-2 sm:flex">
-              <Avatar className="h-8 w-8">
-                <AvatarImage src="https://github.com/shadcn.png" />
-                <AvatarFallback>AK</AvatarFallback>
-              </Avatar>
-              <ChevronDown className="h-4 w-4 text-zinc-500" />
-            </div>
+            {/* Auth Section */}
+            {loading ? (
+              <div className="h-8 w-8 animate-pulse rounded-full bg-[#27272a]" />
+            ) : user ? (
+              <div className="hidden sm:block relative">
+                <DropdownMenu>
+                  <DropdownMenuTrigger className="flex items-center gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-[#27272a]">
+                    <Avatar
+                      src={user.user_metadata?.avatar_url}
+                      name={user.user_metadata?.full_name || user.email || ''}
+                      size="sm"
+                      className="ring-0"
+                    />
+                    <ChevronDown className="h-4 w-4 text-zinc-500" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="absolute right-0 top-2 w-48">
+                    <div className="px-4 py-2 border-b border-[#27272a]">
+                      <p className="text-sm font-medium text-white truncate">
+                        {user.user_metadata?.full_name || 'User'}
+                      </p>
+                      <p className="text-xs text-zinc-500 truncate">{user.email}</p>
+                    </div>
+                    <DropdownMenuItem onClick={() => router.push('/dashboard')}>
+                      <LayoutDashboard className="h-4 w-4" />
+                      Dashboard
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => router.push('/settings')}>
+                      <User className="h-4 w-4" />
+                      Settings
+                    </DropdownMenuItem>
+                    <DropdownMenuItem destructive onClick={handleSignOut}>
+                      <LogOut className="h-4 w-4" />
+                      Sign out
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            ) : (
+              <div className="hidden items-center gap-2 sm:flex">
+                <Link href="/login">
+                  <Button variant="ghost" size="sm" className="text-zinc-400 hover:text-white">
+                    Sign in
+                  </Button>
+                </Link>
+                <Link href="/signup">
+                  <Button
+                    size="sm"
+                    className="bg-gradient-to-r from-violet-500 to-purple-600 text-white hover:from-violet-600 hover:to-purple-700"
+                  >
+                    Sign up
+                  </Button>
+                </Link>
+              </div>
+            )}
 
             {/* Mobile Menu Toggle */}
             <button
@@ -133,10 +214,40 @@ export function Header() {
                   {link.label}
                 </Link>
               ))}
+              {/* Mobile auth links */}
+              {!user && (
+                <>
+                  <Link
+                    href="/login"
+                    className="px-3 py-2 text-sm font-medium text-zinc-400 hover:text-white hover:bg-[#141414] rounded"
+                    onClick={() => setMobileMenuOpen(false)}
+                  >
+                    Sign in
+                  </Link>
+                  <Link
+                    href="/signup"
+                    className="px-3 py-2 text-sm font-medium text-violet-400 hover:bg-[#141414] rounded"
+                    onClick={() => setMobileMenuOpen(false)}
+                  >
+                    Sign up
+                  </Link>
+                </>
+              )}
+              {user && (
+                <button
+                  onClick={() => {
+                    setMobileMenuOpen(false)
+                    handleSignOut()
+                  }}
+                  className="px-3 py-2 text-sm font-medium text-red-400 hover:bg-[#141414] rounded text-left"
+                >
+                  Sign out
+                </button>
+              )}
             </div>
           </nav>
         )}
       </div>
     </header>
-  );
+  )
 }

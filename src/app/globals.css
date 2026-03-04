@@ -107,3 +107,28 @@ body {
 .animate-shimmer {
   animation: shimmer 2s infinite;
 }
+
+/* IDE reader: override inline panel widths on mobile */
+@media (max-width: 1023px) {
+  .reader-panel {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+}
+
+/* Floating "Ask AI" button animation */
+@keyframes ask-ai-pop {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
+}
+
+.animate-ask-ai-pop {
+  animation: ask-ai-pop 0.15s ease-out;
+}
