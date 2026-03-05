@@ -36,13 +36,93 @@ function toModelMessages(uiMessages: any[]): Array<{ role: 'user' | 'assistant';
     .filter((m) => m.content.length > 0)
 }
 
+/** Get or create a conversation record for this session */
+/** Get or create a conversation record for this session */
+async function getOrCreateConversation(
+  supabase: any,
+  bookId: string,
+  sessionId?: string,
+) {
+  // Use `as any` throughout because these columns were added in migration 002
+  // and the Supabase client doesn't have generated types for them.
+  const db = supabase as any
+
+  // If we have a sessionId, try to find existing conversation
+  if (sessionId) {
+    const { data: existing } = await db
+      .from('chat_conversations')
+      .select('id')
+      .eq('session_id', sessionId)
+      .single()
+
+    if (existing) {
+      // Update last_message_at
+      await db
+        .from('chat_conversations')
+        .update({ last_message_at: new Date().toISOString() })
+        .eq('id', existing.id)
+      return existing.id
+    }
+  }
+
+  // Create new conversation
+  const { data: conv } = await db
+    .from('chat_conversations')
+    .insert({
+      book_id: bookId,
+      title: 'Chat Session',
+      session_id: sessionId || null,
+      message_count: 0,
+    })
+    .select('id')
+    .single()
+
+  return conv?.id || null
+}
+
+/** Log a chat message to the database (fire-and-forget) */
+async function logMessage(
+  supabase: any,
+  conversationId: string,
+  role: 'user' | 'assistant',
+  content: string,
+  extras?: {
+    modelUsed?: string
+    inputTokens?: number
+    outputTokens?: number
+    citedChunkIds?: string[]
+  },
+) {
+  const db = supabase as any
+  try {
+    await db.from('chat_messages').insert({
+      conversation_id: conversationId,
+      role,
+      content,
+      model_used: extras?.modelUsed || null,
+      input_tokens: extras?.inputTokens || null,
+      output_tokens: extras?.outputTokens || null,
+      cited_chunk_ids: extras?.citedChunkIds || [],
+    })
+
+    // Update conversation last_message_at
+    // message_count is kept accurate by counting actual messages in queries
+    await db
+      .from('chat_conversations')
+      .update({ last_message_at: new Date().toISOString() })
+      .eq('id', conversationId)
+  } catch (e) {
+    console.error('Failed to log chat message:', e)
+  }
+}
+
 export async function POST(request: Request) {
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
-  const { messages: rawMessages, bookId } = await request.json()
+  const { messages: rawMessages, bookId, sessionId } = await request.json()
 
   if (!bookId || !rawMessages?.length) {
     return new Response('Missing bookId or messages', { status: 400 })
@@ -77,6 +157,7 @@ export async function POST(request: Request) {
     .find((m) => m.role === 'user')
 
   let systemPrompt: string
+  let citedChunkIds: string[] = []
 
   if (lastUserMessage) {
     const chunks = await searchBookChunks(
@@ -84,6 +165,9 @@ export async function POST(request: Request) {
       lastUserMessage.content,
       aiConfig.max_context_chunks || 5
     )
+
+    // Track which chunks were used as context
+    citedChunkIds = chunks.map((c) => c.id)
 
     systemPrompt = buildSystemPrompt(
       book.title,
@@ -95,12 +179,31 @@ export async function POST(request: Request) {
     systemPrompt = `You are a knowledgeable AI assistant for the book "${book.title}" by ${authorName}.`
   }
 
+  // Get or create conversation for logging (non-blocking)
+  const conversationId = await getOrCreateConversation(supabase, bookId, sessionId)
+
+  // Log the user message (fire-and-forget)
+  if (conversationId && lastUserMessage) {
+    logMessage(supabase, conversationId, 'user', lastUserMessage.content)
+  }
+
   try {
     const result = streamText({
       model,
       system: systemPrompt,
       messages,
       temperature: aiConfig.temperature ?? 0.7,
+      // Capture usage after streaming completes
+      onFinish: async ({ text, usage }) => {
+        if (conversationId) {
+          logMessage(supabase, conversationId, 'assistant', text, {
+            modelUsed: modelKey,
+            inputTokens: usage?.inputTokens,
+            outputTokens: usage?.outputTokens,
+            citedChunkIds,
+          })
+        }
+      },
     })
 
     return result.toUIMessageStreamResponse()

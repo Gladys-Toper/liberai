@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback, use } from 'react'
+import { useState, useEffect, useRef, useCallback, use, useMemo } from 'react'
 import { Newsreader } from 'next/font/google'
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
@@ -8,10 +8,11 @@ import Link from 'next/link'
 import {
   ArrowLeft, ChevronLeft, ChevronRight,
   Loader2, BookOpen, MessageSquare, List,
-  Sparkles, X, AlertCircle,
+  Sparkles, X, AlertCircle, Zap,
 } from 'lucide-react'
 import { ChatMessage } from '@/components/chat/chat-message'
 import { ChatInput } from '@/components/chat/chat-input'
+import { SpeedReader } from '@/components/book/SpeedReader'
 import { createClient } from '@/lib/db/supabase-browser'
 import { cn } from '@/lib/utils'
 
@@ -53,6 +54,9 @@ export default function ReadPage({ params }: { params: Promise<{ id: string }> }
   // ── Mobile Tabs ──────────────────────────────────────
   const [mobileTab, setMobileTab] = useState<'chapters' | 'read' | 'chat'>('read')
 
+  // ── Speed Reader ────────────────────────────────────
+  const [speedReaderOpen, setSpeedReaderOpen] = useState(false)
+
   // ── Text Selection ───────────────────────────────────
   const [selectedText, setSelectedText] = useState('')
   const [selectionPos, setSelectionPos] = useState<{ x: number; y: number } | null>(null)
@@ -69,10 +73,12 @@ export default function ReadPage({ params }: { params: Promise<{ id: string }> }
   }, [])
 
   // ── Chat ──────────────────────────────────────────────
+  const sessionId = useMemo(() => `session_${bookId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, [bookId])
+
   const { messages, status, error, sendMessage } = useChat({
     transport: new DefaultChatTransport({
       api: '/api/chat',
-      body: { bookId },
+      body: { bookId, sessionId },
     }),
   })
   const isBusy = status === 'submitted' || status === 'streaming'
@@ -359,6 +365,22 @@ export default function ReadPage({ params }: { params: Promise<{ id: string }> }
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
+          {/* Speed Reader Toggle */}
+          <button
+            onClick={() => setSpeedReaderOpen(true)}
+            disabled={!activeContent}
+            className={cn(
+              'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-all mr-2',
+              'bg-violet-500/10 text-violet-400 hover:bg-violet-500/20 disabled:opacity-25 disabled:cursor-not-allowed',
+            )}
+            title="Speed Read this chapter"
+          >
+            <Zap className="h-3 w-3" />
+            <span className="hidden sm:inline">Speed Read</span>
+          </button>
+
+          <div className="h-4 w-px bg-[#27272a] mr-1" />
+
           <button
             onClick={goPrev}
             disabled={activeIndex <= 0}
@@ -565,6 +587,15 @@ export default function ReadPage({ params }: { params: Promise<{ id: string }> }
               </button>
             )}
           </div>
+
+          {/* Speed Reader Overlay */}
+          {speedReaderOpen && activeContent && (
+            <SpeedReader
+              text={activeContent}
+              chapterTitle={activeChapter?.title}
+              onClose={() => setSpeedReaderOpen(false)}
+            />
+          )}
         </div>
 
         {/* ── RIGHT RESIZE HANDLE ───────────────────────── */}
