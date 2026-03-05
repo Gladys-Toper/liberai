@@ -31,6 +31,13 @@ export function InsightsChat({ authorId, authorName }: InsightsChatProps) {
 
   const isBusy = status === 'submitted' || status === 'streaming'
 
+  const getMessageText = (message: (typeof messages)[0]): string => {
+    return message.parts
+      .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+      .map((p) => p.text)
+      .join('')
+  }
+
   // Auto-scroll on new messages
   useEffect(() => {
     if (scrollRef.current) {
@@ -124,25 +131,11 @@ export function InsightsChat({ authorId, authorName }: InsightsChatProps) {
                   <div
                     className="prose prose-sm prose-invert prose-p:my-1 prose-li:my-0.5 prose-ul:my-1 prose-ol:my-1 prose-headings:my-2 max-w-none"
                     dangerouslySetInnerHTML={{
-                      __html: formatMarkdown(
-                        typeof msg.content === 'string'
-                          ? msg.content
-                          : msg.parts
-                              ?.filter((p: any) => p.type === 'text')
-                              .map((p: any) => p.text)
-                              .join('') || '',
-                      ),
+                      __html: formatMarkdown(getMessageText(msg)),
                     }}
                   />
                 ) : (
-                  <span>
-                    {typeof msg.content === 'string'
-                      ? msg.content
-                      : msg.parts
-                          ?.filter((p: any) => p.type === 'text')
-                          .map((p: any) => p.text)
-                          .join('')}
-                  </span>
+                  <span>{getMessageText(msg)}</span>
                 )}
               </div>
               {msg.role === 'user' && (
