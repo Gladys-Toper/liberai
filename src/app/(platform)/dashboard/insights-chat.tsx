@@ -41,7 +41,7 @@ export function InsightsChat({ authorId, authorName }: InsightsChatProps) {
   const handleSend = (text?: string) => {
     const msg = (text || input).trim()
     if (!msg || isBusy) return
-    sendMessage({ role: 'user', content: msg })
+    sendMessage({ text: msg })
     setInput('')
   }
 
