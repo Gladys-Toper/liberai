@@ -3,20 +3,45 @@
 import { useRef, useEffect, useState } from 'react'
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
-import { Send, Bot, User, Sparkles, Loader2, MessageSquare } from 'lucide-react'
+import {
+  Send,
+  Bot,
+  User,
+  Sparkles,
+  Loader2,
+  MessageSquare,
+  BarChart3,
+  Image,
+  FileText,
+  Twitter,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { ToolResult } from '@/components/chat/tool-results'
 
 interface InsightsChatProps {
   authorId: string
   authorName: string
 }
 
-const SUGGESTED_PROMPTS = [
-  'What are readers most curious about?',
-  'Which passages get referenced the most?',
-  'What topics should I expand on in my next edition?',
-  'Summarize the reader interaction patterns',
+const QUICK_ACTIONS = [
+  { icon: BarChart3, label: 'Show engagement trends', category: 'analytics' as const },
+  { icon: Image, label: 'Create an infographic', category: 'create' as const },
+  { icon: FileText, label: 'Format for Substack', category: 'share' as const },
+  { icon: Twitter, label: 'Create a tweet thread', category: 'share' as const },
 ]
+
+const INSIGHT_PROMPTS = [
+  'What are readers most curious about?',
+  'Which chapters generate the most AI questions?',
+  'What topics should I expand on?',
+  'Summarize reader interaction patterns',
+]
+
+const CATEGORY_COLORS = {
+  analytics: 'border-blue-500/30 text-blue-300 hover:bg-blue-500/10',
+  create: 'border-violet-500/30 text-violet-300 hover:bg-violet-500/10',
+  share: 'border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10',
+}
 
 export function InsightsChat({ authorId, authorName }: InsightsChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -66,9 +91,9 @@ export function InsightsChat({ authorId, authorName }: InsightsChatProps) {
             <Sparkles className="h-4 w-4 text-white" />
           </div>
           <div>
-            <h3 className="text-sm font-semibold text-white">Insights AI</h3>
+            <h3 className="text-sm font-semibold text-white">Command Center</h3>
             <p className="text-[11px] text-zinc-500">
-              Ask about your reader interactions
+              Analytics, infographics, exports &amp; insights
             </p>
           </div>
         </div>
@@ -85,16 +110,35 @@ export function InsightsChat({ authorId, authorName }: InsightsChatProps) {
               <MessageSquare className="h-7 w-7 text-violet-400" />
             </div>
             <h4 className="mb-1 text-sm font-medium text-zinc-300">
-              Your Reader Intelligence
+              Your Author Command Center
             </h4>
-            <p className="mb-6 max-w-[260px] text-xs leading-relaxed text-zinc-600">
-              Ask me anything about how readers interact with your books. I have
-              access to all your conversation data.
+            <p className="mb-5 max-w-[260px] text-xs leading-relaxed text-zinc-600">
+              Create content, analyze engagement, and export chapters — all through conversation.
             </p>
 
-            {/* Suggested prompts */}
+            {/* Quick Action Buttons */}
+            <div className="mb-4 flex flex-wrap justify-center gap-2">
+              {QUICK_ACTIONS.map((action) => {
+                const Icon = action.icon
+                return (
+                  <button
+                    key={action.label}
+                    onClick={() => handleSend(action.label)}
+                    className={cn(
+                      'flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] transition-all',
+                      CATEGORY_COLORS[action.category],
+                    )}
+                  >
+                    <Icon className="h-3 w-3" />
+                    {action.label}
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* Insight Prompts */}
             <div className="w-full space-y-2">
-              {SUGGESTED_PROMPTS.map((prompt) => (
+              {INSIGHT_PROMPTS.map((prompt) => (
                 <button
                   key={prompt}
                   onClick={() => handleSend(prompt)}
@@ -127,16 +171,30 @@ export function InsightsChat({ authorId, authorName }: InsightsChatProps) {
                     : 'bg-[#1a1a1a] text-zinc-300',
                 )}
               >
-                {msg.role === 'assistant' ? (
-                  <div
-                    className="prose prose-sm prose-invert prose-p:my-1 prose-li:my-0.5 prose-ul:my-1 prose-ol:my-1 prose-headings:my-2 max-w-none"
-                    dangerouslySetInnerHTML={{
-                      __html: formatMarkdown(getMessageText(msg)),
-                    }}
-                  />
-                ) : (
-                  <span>{getMessageText(msg)}</span>
-                )}
+                {msg.parts.map((part, i) => {
+                  if (part.type === 'text' && part.text) {
+                    return (
+                      <div
+                        key={i}
+                        className="prose prose-sm prose-invert prose-p:my-1 prose-li:my-0.5 prose-ul:my-1 prose-ol:my-1 prose-headings:my-2 max-w-none"
+                        dangerouslySetInnerHTML={{
+                          __html: formatMarkdown(part.text),
+                        }}
+                      />
+                    )
+                  }
+                  // AI SDK v6: tool parts have type 'tool-{name}' or 'dynamic-tool'
+                  if (part.type === 'dynamic-tool' || (typeof part.type === 'string' && part.type.startsWith('tool-'))) {
+                    return (
+                      <ToolResult
+                        key={i}
+                        part={part as any}
+                        onAction={(message) => handleSend(message)}
+                      />
+                    )
+                  }
+                  return null
+                })}
               </div>
               {msg.role === 'user' && (
                 <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-500/15">
@@ -172,7 +230,7 @@ export function InsightsChat({ authorId, authorName }: InsightsChatProps) {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about your readers…"
+            placeholder="Ask about your readers, create content…"
             className="flex-1 rounded-lg border border-[#27272a] bg-[#0e0e0e] px-3.5 py-2.5 text-sm text-zinc-200 placeholder-zinc-600 outline-none transition-colors focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/20"
             disabled={isBusy}
           />

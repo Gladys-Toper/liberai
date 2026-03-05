@@ -30,6 +30,7 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-reader": "^2.0.15",
+    "recharts": "^3.7.0",
     "sharp": "^0.34.5",
     "tailwind-merge": "^3.5.0",
     "zod": "^3.23.0"

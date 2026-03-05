@@ -10,7 +10,7 @@ export const maxDuration = 60
 const MODEL_MAP = {
   claude: anthropic('claude-sonnet-4-20250514'),
   gpt: openai('gpt-4o-mini'),
-  gemini: google('gemini-2.0-flash'),
+  gemini: google('gemini-2.5-flash'),
 } as const
 
 // Extract text content from a UI message (handles both v6 parts format and legacy content format)
