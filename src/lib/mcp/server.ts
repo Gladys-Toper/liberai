@@ -8,7 +8,7 @@ import { z } from 'zod'
 export function createLiberAiMcpServer(opts: {
   apiKey: string
   baseUrl: string
-  scope: 'author' | 'admin'
+  scope: 'author' | 'admin' | 'agent'
 }) {
   const { apiKey, baseUrl, scope } = opts
 
@@ -31,6 +31,45 @@ export function createLiberAiMcpServer(opts: {
       throw new Error(`API ${res.status}: ${body}`)
     }
     return res.json()
+  }
+
+  // Helper for non-v1 routes (agents, a2a)
+  async function rawFetch(path: string, init?: RequestInit) {
+    const res = await fetch(`${baseUrl}${path}`, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        ...init?.headers,
+      },
+    })
+    if (!res.ok) {
+      const body = await res.text()
+      throw new Error(`API ${res.status}: ${body}`)
+    }
+    return res.json()
+  }
+
+  // Helper for A2A JSON-RPC calls
+  async function a2aCall(method: string, params: Record<string, unknown>) {
+    const res = await fetch(`${baseUrl}/api/a2a`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: crypto.randomUUID(),
+        method,
+        params,
+      }),
+    })
+    const data = await res.json()
+    if (data.error) {
+      throw new Error(`A2A ${data.error.code}: ${data.error.message}`)
+    }
+    return data.result
   }
 
   // -- Author tools --
@@ -358,6 +397,148 @@ export function createLiberAiMcpServer(opts: {
           body: JSON.stringify({ message }),
         })
         return { content: [{ type: 'text' as const, text: data.response }] }
+      },
+    )
+  }
+
+  // -- Agent tools (only if scope is agent) --
+
+  if (scope === 'agent') {
+    server.tool(
+      'discover_agents',
+      'Semantic search for agents by capability description. Returns ranked matches with trust scores.',
+      {
+        query: z.string().describe('Natural language description of desired capabilities (e.g. "summarize books", "translate to Spanish")'),
+        limit: z.number().optional().describe('Max results (default: 5)'),
+        minTrust: z.number().optional().describe('Minimum trust score 0-1 (default: none)'),
+      },
+      async (args) => {
+        const result = await a2aCall('agents/discover', args)
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+      },
+    )
+
+    server.tool(
+      'get_agent_card',
+      'Get an agent\'s full capability card including trust score, capabilities, and economics',
+      { id: z.string().describe('Agent ID') },
+      async ({ id }) => {
+        const result = await a2aCall('agents/card', { id })
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+      },
+    )
+
+    server.tool(
+      'send_task',
+      'Send a task to another agent via A2A protocol. Optionally specify responder or use semantic matchmaking.',
+      {
+        message: z.string().describe('Task message text'),
+        responderAgentId: z.string().optional().describe('Specific agent ID to handle the task'),
+        query: z.string().optional().describe('If no responderAgentId, match an agent by this capability query'),
+        taskId: z.string().optional().describe('Custom task ID (auto-generated if omitted)'),
+      },
+      async ({ message, responderAgentId, query, taskId }) => {
+        const params: Record<string, unknown> = {
+          message: {
+            role: 'user',
+            parts: [{ type: 'text', text: message }],
+          },
+        }
+        if (responderAgentId) params.responderAgentId = responderAgentId
+        if (query) params.query = query
+        if (taskId) params.id = taskId
+        const result = await a2aCall('tasks/send', params)
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+      },
+    )
+
+    server.tool(
+      'get_task_status',
+      'Check the status and result of a previously sent A2A task',
+      { id: z.string().describe('Task ID') },
+      async ({ id }) => {
+        const result = await a2aCall('tasks/get', { id })
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+      },
+    )
+
+    server.tool(
+      'create_swarm',
+      'Create an ephemeral agent swarm for collaborative tasks. Optionally auto-match agents by capabilities.',
+      {
+        name: z.string().describe('Swarm name'),
+        purpose: z.string().describe('What this swarm aims to accomplish'),
+        taskType: z.string().optional().describe('Task category (e.g. "book_review", "translation")'),
+        maxMembers: z.number().optional().describe('Maximum members (default: 10)'),
+        ttlMinutes: z.number().optional().describe('Time to live in minutes (default: 60)'),
+        requiredCapabilities: z.array(z.string()).optional().describe('Auto-match agents with these capabilities'),
+      },
+      async (args) => {
+        const result = await a2aCall('swarms/create', args)
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+      },
+    )
+
+    server.tool(
+      'join_swarm',
+      'Join an existing swarm as a participant',
+      { swarmId: z.string().describe('Swarm ID to join') },
+      async ({ swarmId }) => {
+        const result = await a2aCall('swarms/join', { swarmId })
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+      },
+    )
+
+    server.tool(
+      'contribute_to_swarm',
+      'Submit a contribution (output/result) to a swarm you\'re a member of',
+      {
+        swarmId: z.string().describe('Swarm ID'),
+        contribution: z.record(z.unknown()).describe('Contribution data (structured output)'),
+      },
+      async (args) => {
+        const result = await a2aCall('swarms/contribute', args)
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+      },
+    )
+
+    server.tool(
+      'subscribe_events',
+      'Subscribe to platform events (e.g. new_book, new_rating, swarm_formed). Delivery via webhook or A2A.',
+      {
+        eventPattern: z.string().describe('Event pattern to match (e.g. "new_book", "swarm.*", "*")'),
+        filter: z.record(z.unknown()).optional().describe('Filter criteria (e.g. { category: "fiction" })'),
+        delivery: z.enum(['webhook', 'a2a', 'poll']).optional().describe('Delivery method (default: webhook)'),
+      },
+      async (args) => {
+        const result = await a2aCall('events/subscribe', args)
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+      },
+    )
+
+    server.tool(
+      'get_trust_history',
+      'Get trust score history and interaction breakdown for an agent',
+      {
+        agentId: z.string().describe('Agent ID'),
+        days: z.number().optional().describe('Lookback period in days (default: 30)'),
+      },
+      async ({ agentId, days }) => {
+        const data = await rawFetch(`/api/agents/${agentId}/trust?days=${days || 30}`)
+        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] }
+      },
+    )
+
+    server.tool(
+      'get_economics',
+      'Get agent economics: earnings, spending, cost breakdown, top counterparties',
+      {
+        agentId: z.string().describe('Agent ID'),
+        days: z.number().optional().describe('Lookback period in days (default: 30)'),
+      },
+      async ({ agentId, days }) => {
+        const data = await rawFetch(`/api/agents/${agentId}/economics?days=${days || 30}`)
+        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] }
       },
     )
   }

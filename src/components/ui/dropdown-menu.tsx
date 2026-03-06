@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 interface DropdownMenuContextType {
   open: boolean;
   setOpen: (open: boolean) => void;
+  triggerRef: React.RefObject<HTMLButtonElement | null>;
 }
 
 const DropdownMenuContext = React.createContext<
@@ -28,17 +29,23 @@ const DropdownMenu = React.forwardRef<HTMLDivElement, DropdownMenuProps>(
   ({ open: controlledOpen, onOpenChange, children }, ref) => {
     const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
     const containerRef = React.useRef<HTMLDivElement>(null);
+    const triggerRef = React.useRef<HTMLButtonElement>(null);
 
     const open = controlledOpen ?? uncontrolledOpen;
-    const setOpen = (newOpen: boolean) => {
-      if (controlledOpen === undefined) {
-        setUncontrolledOpen(newOpen);
-      }
-      onOpenChange?.(newOpen);
-    };
+    const setOpen = React.useCallback(
+      (newOpen: boolean) => {
+        if (controlledOpen === undefined) {
+          setUncontrolledOpen(newOpen);
+        }
+        onOpenChange?.(newOpen);
+      },
+      [controlledOpen, onOpenChange]
+    );
 
-    // Click outside — uses containerRef so clicks on trigger don't close
+    // Close on click outside — use 'click' (not 'mousedown') for Safari compat
     React.useEffect(() => {
+      if (!open) return;
+
       const handleClickOutside = (event: MouseEvent) => {
         if (
           containerRef.current &&
@@ -48,34 +55,33 @@ const DropdownMenu = React.forwardRef<HTMLDivElement, DropdownMenuProps>(
         }
       };
 
-      if (open) {
-        document.addEventListener("mousedown", handleClickOutside);
-      }
+      // Use setTimeout so the current click event finishes before we listen
+      const id = setTimeout(() => {
+        document.addEventListener("click", handleClickOutside, true);
+      }, 0);
 
       return () => {
-        document.removeEventListener("mousedown", handleClickOutside);
+        clearTimeout(id);
+        document.removeEventListener("click", handleClickOutside, true);
       };
     }, [open, setOpen]);
 
     // Escape key
     React.useEffect(() => {
+      if (!open) return;
+
       const handleEscape = (event: KeyboardEvent) => {
         if (event.key === "Escape") {
           setOpen(false);
         }
       };
 
-      if (open) {
-        document.addEventListener("keydown", handleEscape);
-      }
-
-      return () => {
-        document.removeEventListener("keydown", handleEscape);
-      };
+      document.addEventListener("keydown", handleEscape);
+      return () => document.removeEventListener("keydown", handleEscape);
     }, [open, setOpen]);
 
     return (
-      <DropdownMenuContext.Provider value={{ open, setOpen }}>
+      <DropdownMenuContext.Provider value={{ open, setOpen, triggerRef }}>
         <div ref={containerRef} className="relative">
           {children}
         </div>
@@ -95,12 +101,24 @@ const DropdownMenuTrigger = React.forwardRef<
   HTMLButtonElement,
   DropdownMenuTriggerProps
 >(({ onClick, children, asChild, ...props }, ref) => {
-  const { setOpen, open } = useDropdownMenu();
+  const { setOpen, open, triggerRef } = useDropdownMenu();
 
   const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
     setOpen(!open);
     onClick?.(e);
   };
+
+  // Merge refs
+  const mergedRef = React.useCallback(
+    (node: HTMLButtonElement | null) => {
+      (triggerRef as React.MutableRefObject<HTMLButtonElement | null>).current =
+        node;
+      if (typeof ref === "function") ref(node);
+      else if (ref) (ref as React.MutableRefObject<HTMLButtonElement | null>).current = node;
+    },
+    [ref, triggerRef]
+  );
 
   if (asChild && React.isValidElement(children)) {
     return React.cloneElement(children as React.ReactElement<any>, {
@@ -109,7 +127,7 @@ const DropdownMenuTrigger = React.forwardRef<
   }
 
   return (
-    <button ref={ref} onClick={handleClick} {...props}>
+    <button ref={mergedRef} type="button" onClick={handleClick} {...props}>
       {children}
     </button>
   );
@@ -137,7 +155,9 @@ const DropdownMenuContent = React.forwardRef<
       )}
       role="menu"
       {...props}
-    />
+    >
+      {children}
+    </div>
   );
 });
 
@@ -151,7 +171,7 @@ export interface DropdownMenuItemProps
 const DropdownMenuItem = React.forwardRef<
   HTMLButtonElement,
   DropdownMenuItemProps
->(({ className, destructive, onClick, ...props }, ref) => {
+>(({ className, destructive, onClick, children, ...props }, ref) => {
   const { setOpen } = useDropdownMenu();
 
   const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -162,6 +182,7 @@ const DropdownMenuItem = React.forwardRef<
   return (
     <button
       ref={ref}
+      type="button"
       className={cn(
         "relative flex w-full cursor-pointer select-none items-center gap-2 px-4 py-2 text-sm outline-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8b5cf6] disabled:pointer-events-none disabled:opacity-50",
         destructive
@@ -172,7 +193,9 @@ const DropdownMenuItem = React.forwardRef<
       role="menuitem"
       onClick={handleClick}
       {...props}
-    />
+    >
+      {children}
+    </button>
   );
 });
 

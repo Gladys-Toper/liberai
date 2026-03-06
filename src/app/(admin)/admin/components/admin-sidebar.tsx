@@ -2,13 +2,15 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { BarChart3, Users, ShoppingCart, Settings } from 'lucide-react'
+import { BarChart3, Users, ShoppingCart, Settings, Bot, Radio } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const NAV_ITEMS = [
   { href: '/admin', label: 'Overview', icon: BarChart3 },
   { href: '/admin/crm', label: 'CRM', icon: Users },
   { href: '/admin/sales', label: 'Sales', icon: ShoppingCart },
+  { href: '/admin/agents', label: 'Agents', icon: Bot },
+  { href: '/admin/observatory', label: 'Observatory', icon: Radio },
   { href: '/admin/settings', label: 'Settings', icon: Settings },
 ]
 

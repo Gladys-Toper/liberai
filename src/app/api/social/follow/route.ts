@@ -3,6 +3,7 @@ import { createServerClient } from '@supabase/ssr'
 import { createClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 import { getFollowStatus, createActivityEvent, createNotification } from '@/lib/db/queries/social'
+import { dispatchEvent } from '@/lib/agents/event-dispatcher'
 
 async function getUser() {
   const cookieStore = await cookies()
@@ -69,7 +70,7 @@ export async function POST(request: Request) {
   // Get actor name for metadata
   const { data: actor } = await db().from('users').select('name').eq('id', user.id).single()
 
-  // Fire-and-forget: activity event + notification
+  // Fire-and-forget: activity event + notification + agent dispatch
   await Promise.all([
     createActivityEvent({
       actorId: user.id,
@@ -85,6 +86,12 @@ export async function POST(request: Request) {
       targetType: 'user',
       targetId: user.id,
       metadata: { actorName: actor?.name },
+    }),
+    dispatchEvent({
+      eventType: 'new_follow',
+      payload: { followerId: user.id, followingId, followerName: actor?.name },
+      sourceType: 'human',
+      sourceId: user.id,
     }),
   ])
 

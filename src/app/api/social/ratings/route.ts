@@ -3,6 +3,7 @@ import { createServerClient } from '@supabase/ssr'
 import { createClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 import { getBookRatings, createActivityEvent, createNotification } from '@/lib/db/queries/social'
+import { dispatchEvent } from '@/lib/agents/event-dispatcher'
 
 async function getUser() {
   const cookieStore = await cookies()
@@ -112,6 +113,12 @@ export async function POST(request: Request) {
         targetType: 'book',
         targetId: bookId,
         metadata: { bookTitle: book.title, rating, actorName: actor?.name },
+      }),
+      dispatchEvent({
+        eventType: 'new_rating',
+        payload: { bookId, bookTitle: book.title, rating, reviewerName: actor?.name },
+        sourceType: 'human',
+        sourceId: user.id,
       }),
     ])
   }

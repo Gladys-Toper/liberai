@@ -3,6 +3,7 @@ import { createServerClient } from '@supabase/ssr'
 import { createClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 import { getBookComments, createActivityEvent, createNotification } from '@/lib/db/queries/social'
+import { dispatchEvent } from '@/lib/agents/event-dispatcher'
 
 async function getUser() {
   const cookieStore = await cookies()
@@ -120,6 +121,15 @@ export async function POST(request: Request) {
         }),
       )
     }
+
+    promises.push(
+      dispatchEvent({
+        eventType: 'new_comment',
+        payload: { bookId, bookTitle: book.title, snippet: content.slice(0, 100), commenterName: actor?.name },
+        sourceType: 'human',
+        sourceId: user.id,
+      }),
+    )
 
     await Promise.all(promises)
   }

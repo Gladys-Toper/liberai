@@ -9,6 +9,10 @@ import {
   MessageSquare,
   ArrowRight,
   Crown,
+  Bot,
+  Radio,
+  Shield,
+  Zap,
 } from 'lucide-react'
 import { formatNumber } from '@/lib/utils'
 import { StatTile } from './components/stat-tile'
@@ -18,13 +22,15 @@ import {
   getAuthorLeaderboard,
   getRecentOrders,
 } from '@/lib/db/queries/admin'
+import { getAgentStats } from '@/lib/db/queries/agents'
 
 export default async function AdminOverviewPage() {
-  const [overview, topBooks, topAuthors, recentOrders] = await Promise.all([
+  const [overview, topBooks, topAuthors, recentOrders, agentStats] = await Promise.all([
     getPlatformOverview(30),
     getTopBooksByRevenue(5, 30),
     getAuthorLeaderboard(5, 30),
     getRecentOrders(10),
+    getAgentStats().catch(() => null),
   ])
 
   return (
@@ -98,6 +104,40 @@ export default async function AdminOverviewPage() {
           bg={overview.netProfit >= 0 ? 'bg-emerald-500/8' : 'bg-red-500/8'}
         />
       </div>
+
+      {/* Stats row 3 — Agent Network */}
+      {agentStats && (
+        <div className="mb-6 grid grid-cols-4 gap-3">
+          <StatTile
+            label="Active Agents"
+            value={formatNumber(agentStats.activeAgents)}
+            icon={<Bot className="h-4 w-4" />}
+            accent="text-cyan-400"
+            bg="bg-cyan-500/8"
+          />
+          <StatTile
+            label="Active Swarms"
+            value={formatNumber(agentStats.activeSwarms)}
+            icon={<Radio className="h-4 w-4" />}
+            accent="text-teal-400"
+            bg="bg-teal-500/8"
+          />
+          <StatTile
+            label="Events (24h)"
+            value={formatNumber(agentStats.events24h)}
+            icon={<Zap className="h-4 w-4" />}
+            accent="text-violet-400"
+            bg="bg-violet-500/8"
+          />
+          <StatTile
+            label="Avg Trust"
+            value={agentStats.avgTrustScore.toFixed(2)}
+            icon={<Shield className="h-4 w-4" />}
+            accent="text-amber-400"
+            bg="bg-amber-500/8"
+          />
+        </div>
+      )}
 
       {/* Top Books */}
       <section className="mb-6">
