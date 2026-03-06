@@ -8,6 +8,9 @@ import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { formatNumber, getInitials } from '@/lib/utils';
 import { getBook, getChapters, getBooksByAuthor, getCurrentUser, getBookAccessStatus, type BookAccessStatus } from '@/lib/db/queries';
 import { BuyButton } from '@/components/book/buy-button';
+import { getFollowStatus, getBookRatings, getUserRating } from '@/lib/db/queries/social';
+import { FollowButton } from '@/components/social/follow-button';
+import { ReviewsSection } from '@/components/social/reviews-section';
 
 function estimateReadingTime(wordCount: number): number {
   return Math.max(1, Math.ceil(wordCount / 250));
@@ -36,6 +39,12 @@ export default async function BookDetailPage({
 
   const author = book.authors;
   const canRead = accessStatus !== 'requires_purchase';
+
+  const [followStatus, ratingsData, userRating] = await Promise.all([
+    user && author.user_id ? getFollowStatus(user.id, author.user_id) : null,
+    getBookRatings(id, 1, 10),
+    user ? getUserRating(user.id, id) : null,
+  ]);
 
   return (
     <div className="min-h-screen bg-[#0a0a0a]">
@@ -111,6 +120,16 @@ export default async function BookDetailPage({
                       {formatNumber(book.total_chats)}
                     </p>
                   </div>
+                  {ratingsData.avgRating > 0 && (
+                    <div>
+                      <p className="text-sm text-zinc-500">Rating</p>
+                      <p className="flex items-center gap-1 text-xl font-semibold text-white">
+                        <Star className="h-5 w-5 fill-amber-400 text-amber-400" />
+                        {ratingsData.avgRating.toFixed(1)}
+                        <span className="text-sm font-normal text-zinc-500">({ratingsData.total})</span>
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 {/* Price */}
@@ -197,6 +216,17 @@ export default async function BookDetailPage({
         </section>
       )}
 
+      {/* Ratings & Reviews */}
+      <ReviewsSection
+        bookId={book.id}
+        initialAvgRating={ratingsData.avgRating}
+        initialRatingCount={ratingsData.total}
+        initialDistribution={ratingsData.distribution}
+        isAuthenticated={!!user}
+        userExistingRating={userRating?.rating}
+        userExistingReview={userRating?.review_text ?? undefined}
+      />
+
       {/* Author Card */}
       <section className="px-4 py-12 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-4xl">
@@ -209,11 +239,21 @@ export default async function BookDetailPage({
                 </AvatarFallback>
               </Avatar>
               <div className="flex-1">
-                <Link href={`/author/${author.id}`}>
-                  <h3 className="mb-1 text-xl font-bold text-white hover:text-violet-400">
-                    {author.display_name}
-                  </h3>
-                </Link>
+                <div className="flex items-center gap-3">
+                  <Link href={`/author/${author.id}`}>
+                    <h3 className="mb-1 text-xl font-bold text-white hover:text-violet-400">
+                      {author.display_name}
+                    </h3>
+                  </Link>
+                  {followStatus && user?.id !== author.user_id && (
+                    <FollowButton
+                      targetUserId={author.user_id}
+                      initialIsFollowing={followStatus.isFollowing}
+                      initialFollowerCount={followStatus.followerCount}
+                      showCount
+                    />
+                  )}
+                </div>
               </div>
             </div>
 

@@ -145,6 +145,124 @@ export function createLiberAiMcpServer(opts: {
     },
   )
 
+  // -- Social tools --
+
+  server.tool(
+    'follow_user',
+    'Follow or unfollow a user',
+    {
+      followingId: z.string().describe('User ID to follow/unfollow'),
+      action: z.enum(['follow', 'unfollow']).describe('Action to perform'),
+    },
+    async ({ followingId, action }) => {
+      const data = await apiFetch('/social/follow', {
+        method: action === 'follow' ? 'POST' : 'DELETE',
+        body: JSON.stringify({ followingId }),
+      })
+      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    'get_feed',
+    'Get activity feed from followed users',
+    {
+      page: z.number().optional().describe('Page number (default: 1)'),
+      limit: z.number().optional().describe('Items per page (default: 20)'),
+    },
+    async ({ page, limit }) => {
+      const params = new URLSearchParams()
+      if (page) params.set('page', String(page))
+      if (limit) params.set('limit', String(limit))
+      const data = await apiFetch(`/social/feed?${params}`)
+      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    'get_notifications',
+    'Get user notifications',
+    {
+      unreadOnly: z.boolean().optional().describe('Only show unread notifications'),
+      limit: z.number().optional(),
+    },
+    async ({ unreadOnly, limit }) => {
+      const params = new URLSearchParams()
+      if (unreadOnly) params.set('unreadOnly', 'true')
+      if (limit) params.set('limit', String(limit))
+      const data = await apiFetch(`/social/notifications?${params}`)
+      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    'rate_book',
+    'Rate a book (1-5 stars) with optional review text',
+    {
+      bookId: z.string().describe('Book ID to rate'),
+      rating: z.number().min(1).max(5).describe('Rating from 1 to 5'),
+      reviewText: z.string().optional().describe('Optional review text'),
+    },
+    async (args) => {
+      const data = await apiFetch('/social/ratings', {
+        method: 'POST',
+        body: JSON.stringify(args),
+      })
+      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    'get_book_ratings',
+    'Get ratings and reviews for a book',
+    {
+      bookId: z.string().describe('Book ID'),
+      page: z.number().optional(),
+      limit: z.number().optional(),
+    },
+    async ({ bookId, page, limit }) => {
+      const params = new URLSearchParams({ bookId })
+      if (page) params.set('page', String(page))
+      if (limit) params.set('limit', String(limit))
+      const data = await apiFetch(`/social/ratings?${params}`)
+      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    'add_comment',
+    'Add a comment to a book',
+    {
+      bookId: z.string().describe('Book ID'),
+      content: z.string().describe('Comment text (max 2000 chars)'),
+      parentId: z.string().optional().describe('Parent comment ID for replies'),
+    },
+    async (args) => {
+      const data = await apiFetch('/social/comments', {
+        method: 'POST',
+        body: JSON.stringify(args),
+      })
+      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    'get_book_comments',
+    'Get comments for a book',
+    {
+      bookId: z.string().describe('Book ID'),
+      page: z.number().optional(),
+      limit: z.number().optional(),
+    },
+    async ({ bookId, page, limit }) => {
+      const params = new URLSearchParams({ bookId })
+      if (page) params.set('page', String(page))
+      if (limit) params.set('limit', String(limit))
+      const data = await apiFetch(`/social/comments?${params}`)
+      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] }
+    },
+  )
+
   // -- Admin tools (only if scope is admin) --
 
   if (scope === 'admin') {

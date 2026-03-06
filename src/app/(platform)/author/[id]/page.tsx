@@ -2,14 +2,16 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import {
   BookOpen, Eye, MessageCircle, Star, ArrowRight,
-  Shield, Globe,
+  Shield, Globe, Users,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { formatNumber, getInitials } from '@/lib/utils'
-import { getAuthor, getBooksByAuthor } from '@/lib/db/queries'
+import { getAuthor, getBooksByAuthor, getCurrentUser } from '@/lib/db/queries'
+import { getFollowStatus } from '@/lib/db/queries/social'
+import { FollowButton } from '@/components/social/follow-button'
 
 export default async function AuthorPage({
   params,
@@ -23,7 +25,14 @@ export default async function AuthorPage({
     notFound()
   }
 
-  const books = await getBooksByAuthor(id)
+  const [books, currentUser] = await Promise.all([
+    getBooksByAuthor(id),
+    getCurrentUser(),
+  ])
+
+  const followStatus = currentUser && author.user_id
+    ? await getFollowStatus(currentUser.id, author.user_id)
+    : null
   const publishedBooks = books.filter((b: any) => b.status === 'published')
 
   const totalReads = books.reduce((sum: number, b: any) => sum + (b.total_reads || 0), 0)
@@ -58,7 +67,7 @@ export default async function AuthorPage({
 
             {/* Info */}
             <div className="flex-1">
-              <div className="mb-2 flex items-center justify-center gap-2 sm:justify-start">
+              <div className="mb-2 flex items-center justify-center gap-3 sm:justify-start">
                 <h1 className="text-3xl font-bold text-white sm:text-4xl">
                   {author.display_name}
                 </h1>
@@ -66,6 +75,13 @@ export default async function AuthorPage({
                   <Badge className="bg-blue-500/15 text-blue-400 border-blue-500/30">
                     Verified
                   </Badge>
+                )}
+                {followStatus && currentUser?.id !== author.user_id && (
+                  <FollowButton
+                    targetUserId={author.user_id}
+                    initialIsFollowing={followStatus.isFollowing}
+                    initialFollowerCount={followStatus.followerCount}
+                  />
                 )}
               </div>
 
@@ -121,6 +137,21 @@ export default async function AuthorPage({
                       <div>
                         <p className="text-lg font-bold text-white">{avgRating.toFixed(1)}</p>
                         <p className="text-[11px] text-zinc-500">Avg Rating</p>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {followStatus && (
+                  <>
+                    <div className="h-8 w-px bg-[#27272a]" />
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-purple-500/10">
+                        <Users className="h-4 w-4 text-purple-400" />
+                      </div>
+                      <div>
+                        <p className="text-lg font-bold text-white">{formatNumber(followStatus.followerCount)}</p>
+                        <p className="text-[11px] text-zinc-500">Followers</p>
                       </div>
                     </div>
                   </>

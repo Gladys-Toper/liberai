@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { BookOpen, Search, Menu, X, ChevronDown, LogOut, User, LayoutDashboard, Shield } from 'lucide-react'
+import { BookOpen, Search, Menu, X, ChevronDown, LogOut, User, LayoutDashboard, Shield, Rss } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Avatar } from '@/components/ui/avatar'
@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/db/supabase-browser'
+import { NotificationBell } from '@/components/social/notification-bell'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
 
 export function Header() {
@@ -58,11 +59,14 @@ export function Header() {
     router.refresh()
   }
 
-  const navLinks = [
+  const baseLinks = [
     { href: '/marketplace', label: 'Explore' },
     { href: '/library', label: 'Library' },
-    { href: '/dashboard', label: 'For Authors' },
   ]
+
+  const navLinks = user
+    ? [...baseLinks, { href: '/feed', label: 'Feed' }, { href: '/dashboard', label: 'For Authors' }]
+    : [...baseLinks, { href: '/dashboard', label: 'For Authors' }]
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/')
 
@@ -138,7 +142,8 @@ export function Header() {
             {loading ? (
               <div className="h-8 w-8 animate-pulse rounded-full bg-[#27272a]" />
             ) : user ? (
-              <div className="hidden sm:block">
+              <div className="hidden items-center gap-2 sm:flex">
+                <NotificationBell />
                 <DropdownMenu>
                   <DropdownMenuTrigger className="flex items-center gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-[#27272a]">
                     <Avatar
