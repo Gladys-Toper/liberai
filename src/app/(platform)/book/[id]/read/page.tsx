@@ -69,12 +69,17 @@ export default function ReadPage({ params }: { params: Promise<{ id: string }> }
 
   // ── Refs ──────────────────────────────────────────────
   const readingRef = useRef<HTMLDivElement>(null)
+  const chatScrollRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // Hide page-level scroll (prevents footer from showing below the fixed-height reader)
   useEffect(() => {
     document.documentElement.style.overflow = 'hidden'
-    return () => { document.documentElement.style.overflow = '' }
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.documentElement.style.overflow = ''
+      document.body.style.overflow = ''
+    }
   }, [])
 
   // ── Chat ──────────────────────────────────────────────
@@ -268,9 +273,12 @@ export default function ReadPage({ params }: { params: Promise<{ id: string }> }
       .map((p) => p.text)
       .join('')
 
-  // Scroll chat to bottom on new messages
+  // Scroll chat to bottom on new messages (use direct container scroll to avoid shifting parent layout)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const container = chatScrollRef.current
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
+    }
   }, [messages])
 
   // ═══════════════════════════════════════════════════════
@@ -658,7 +666,7 @@ export default function ReadPage({ params }: { params: Promise<{ id: string }> }
           </div>
 
           {/* Chat Messages */}
-          <div className="flex-1 overflow-y-auto p-4">
+          <div ref={chatScrollRef} className="flex-1 overflow-y-auto p-4">
             {messages.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
                 <div className="rounded-2xl bg-violet-500/[0.08] p-4">

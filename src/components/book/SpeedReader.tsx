@@ -169,9 +169,13 @@ export function SpeedReader({ text, chapterTitle, onClose }: SpeedReaderProps) {
   // ── Keyboard Shortcuts ─────────────────────────────────
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
-      // Don't capture if user is typing in an input, textarea, or contenteditable
-      const tag = (e.target as HTMLElement).tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement).isContentEditable) return
+      // Don't capture if user is typing in any text-entry element
+      const isTextInput = (el: Element | null): boolean => {
+        if (!el) return false
+        const tag = el.tagName
+        return tag === 'INPUT' || tag === 'TEXTAREA' || (el as HTMLElement).isContentEditable || el.getAttribute('role') === 'textbox'
+      }
+      if (isTextInput(e.target as Element) || isTextInput(document.activeElement)) return
 
       switch (e.code) {
         case 'Space':
