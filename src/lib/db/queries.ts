@@ -249,14 +249,15 @@ export async function getBooksByAuthor(authorId: string) {
 // ============================================================
 
 /**
- * Get the current user's library (books with reading progress).
+ * Get the current user's library (books with reading progress + purchased books).
  */
 export async function getUserLibrary() {
   const supabase = await getSupabase()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return []
 
-  const { data, error } = await supabase
+  // Fetch reading progress
+  const { data: progressData, error: progressErr } = await supabase
     .from('reading_progress')
     .select(`
       progress_percent,
@@ -270,14 +271,15 @@ export async function getUserLibrary() {
     .eq('user_id', user.id)
     .order('last_read_at', { ascending: false })
 
-  if (error) {
-    console.error('getUserLibrary error:', error)
-    return []
+  if (progressErr) {
+    console.error('getUserLibrary progress error:', progressErr)
   }
-  return (data as unknown) as Array<{
+
+  type LibraryEntry = {
     progress_percent: number
     last_read_at: string
     epub_cfi: string | null
+    purchased: boolean
     books: {
       id: string
       title: string
@@ -285,7 +287,55 @@ export async function getUserLibrary() {
       category: string
       authors: { id: string; display_name: string; avatar_url: string | null }
     }
-  }>
+  }
+
+  const entries: LibraryEntry[] = ((progressData || []) as unknown as LibraryEntry[]).map(e => ({
+    ...e,
+    purchased: false,
+  }))
+  const seenBookIds = new Set(entries.map(e => e.books.id))
+
+  // Fetch purchased books not yet in reading_progress
+  const { data: orders, error: ordersErr } = await supabase
+    .from('orders')
+    .select(`
+      book_id, created_at,
+      books!inner(
+        id, title, cover_url, category,
+        authors!inner(id, display_name, avatar_url)
+      )
+    `)
+    .eq('user_id', user.id)
+    .eq('status', 'completed')
+    .order('created_at', { ascending: false })
+
+  if (ordersErr) {
+    console.error('getUserLibrary orders error:', ordersErr)
+  }
+
+  // Mark existing entries as purchased if they have an order
+  const purchasedBookIds = new Set((orders || []).map((o: any) => o.book_id))
+  for (const entry of entries) {
+    if (purchasedBookIds.has(entry.books.id)) {
+      entry.purchased = true
+    }
+  }
+
+  // Add purchased books that don't have reading progress yet
+  for (const order of (orders || []) as any[]) {
+    if (!seenBookIds.has(order.book_id)) {
+      seenBookIds.add(order.book_id)
+      entries.push({
+        progress_percent: 0,
+        last_read_at: order.created_at,
+        epub_cfi: null,
+        purchased: true,
+        books: order.books,
+      })
+    }
+  }
+
+  return entries
 }
 
 // ============================================================
@@ -370,6 +420,58 @@ export async function getAuthorRecentConversations(authorId: string, limit = 5) 
     ...conv,
     bookTitle: bookTitleMap[conv.book_id] || 'Unknown Book',
   }))
+}
+
+// ============================================================
+// PURCHASE / ACCESS CHECKS
+// ============================================================
+
+export type BookAccessStatus = 'free' | 'purchased' | 'requires_purchase' | 'author'
+
+/**
+ * Get the access status for a user on a specific book.
+ */
+export async function getBookAccessStatus(userId: string, bookId: string): Promise<BookAccessStatus> {
+  const supabase = await getSupabase()
+
+  const { data: book } = await supabase
+    .from('books')
+    .select('price, author_id')
+    .eq('id', bookId)
+    .single()
+
+  if (!book) return 'requires_purchase'
+  if (Number(book.price) === 0) return 'free'
+
+  // Check if user is the author
+  const { data: author } = await supabase
+    .from('authors')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('id', book.author_id)
+    .single()
+
+  if (author) return 'author'
+
+  // Check if user has purchased
+  const { data: order } = await supabase
+    .from('orders')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('book_id', bookId)
+    .eq('status', 'completed')
+    .limit(1)
+    .single()
+
+  return order ? 'purchased' : 'requires_purchase'
+}
+
+/**
+ * Check if a user has purchased a specific book.
+ */
+export async function hasUserPurchasedBook(userId: string, bookId: string): Promise<boolean> {
+  const status = await getBookAccessStatus(userId, bookId)
+  return status !== 'requires_purchase'
 }
 
 // ============================================================

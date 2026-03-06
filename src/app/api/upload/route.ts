@@ -43,6 +43,12 @@ export async function POST(request: Request) {
     const title = formData.get('title') as string | null
     const description = formData.get('description') as string | null
     const genre = formData.get('genre') as string | null
+    const priceStr = formData.get('price') as string | null
+    const price = priceStr ? parseFloat(priceStr) : 0
+
+    if (isNaN(price) || price < 0) {
+      return NextResponse.json({ error: 'Invalid price' }, { status: 400 })
+    }
 
     if (!file) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 })
@@ -175,6 +181,7 @@ export async function POST(request: Request) {
         language: parsed.language,
         word_count: totalWords,
         page_count: Math.ceil(totalWords / 250),
+        price,
         status: 'draft',
         source_file_type: 'epub',
         ai_config: {

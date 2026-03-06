@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, BadgeCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -20,6 +20,7 @@ export default async function LibraryPage() {
     },
     progress: entry.progress_percent,
     lastRead: entry.last_read_at ? new Date(entry.last_read_at) : new Date(),
+    purchased: entry.purchased ?? false,
   }));
 
   return (
@@ -52,6 +53,12 @@ export default async function LibraryPage() {
                           {book.title.charAt(0)}
                         </span>
                       </div>
+                      {book.purchased && (
+                        <div className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
+                          <BadgeCheck className="h-3 w-3" />
+                          Purchased
+                        </div>
+                      )}
                     </div>
 
                     <div className="p-4 space-y-4">

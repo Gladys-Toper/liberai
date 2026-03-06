@@ -27,6 +27,7 @@ export interface DropdownMenuProps {
 const DropdownMenu = React.forwardRef<HTMLDivElement, DropdownMenuProps>(
   ({ open: controlledOpen, onOpenChange, children }, ref) => {
     const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
+    const containerRef = React.useRef<HTMLDivElement>(null);
 
     const open = controlledOpen ?? uncontrolledOpen;
     const setOpen = (newOpen: boolean) => {
@@ -36,9 +37,48 @@ const DropdownMenu = React.forwardRef<HTMLDivElement, DropdownMenuProps>(
       onOpenChange?.(newOpen);
     };
 
+    // Click outside — uses containerRef so clicks on trigger don't close
+    React.useEffect(() => {
+      const handleClickOutside = (event: MouseEvent) => {
+        if (
+          containerRef.current &&
+          !containerRef.current.contains(event.target as Node)
+        ) {
+          setOpen(false);
+        }
+      };
+
+      if (open) {
+        document.addEventListener("mousedown", handleClickOutside);
+      }
+
+      return () => {
+        document.removeEventListener("mousedown", handleClickOutside);
+      };
+    }, [open, setOpen]);
+
+    // Escape key
+    React.useEffect(() => {
+      const handleEscape = (event: KeyboardEvent) => {
+        if (event.key === "Escape") {
+          setOpen(false);
+        }
+      };
+
+      if (open) {
+        document.addEventListener("keydown", handleEscape);
+      }
+
+      return () => {
+        document.removeEventListener("keydown", handleEscape);
+      };
+    }, [open, setOpen]);
+
     return (
       <DropdownMenuContext.Provider value={{ open, setOpen }}>
-        <div ref={ref}>{children}</div>
+        <div ref={containerRef} className="relative">
+          {children}
+        </div>
       </DropdownMenuContext.Provider>
     );
   }
@@ -84,37 +124,15 @@ const DropdownMenuContent = React.forwardRef<
   HTMLDivElement,
   DropdownMenuContentProps
 >(({ className, children, ...props }, ref) => {
-  const { open, setOpen } = useDropdownMenu();
-  const contentRef = React.useRef<HTMLDivElement>(null);
-  const triggerRef = React.useRef<HTMLDivElement>(null);
-
-  React.useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        contentRef.current &&
-        !contentRef.current.contains(event.target as Node) &&
-        !triggerRef.current?.contains(event.target as Node)
-      ) {
-        setOpen(false);
-      }
-    };
-
-    if (open) {
-      document.addEventListener("mousedown", handleClickOutside);
-    }
-
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, [open, setOpen]);
+  const { open } = useDropdownMenu();
 
   if (!open) return null;
 
   return (
     <div
-      ref={contentRef}
+      ref={ref}
       className={cn(
-        "fixed z-50 min-w-[8rem] overflow-hidden rounded-md border border-[#27272a] bg-[#141414] py-1 shadow-md animate-fade-in",
+        "absolute right-0 top-full mt-1 z-[60] min-w-[8rem] overflow-hidden rounded-md border border-[#27272a] bg-[#141414] py-1 shadow-md animate-fade-in",
         className
       )}
       role="menu"

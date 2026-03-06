@@ -6,7 +6,8 @@ import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { formatNumber, getInitials } from '@/lib/utils';
-import { getBook, getChapters, getBooksByAuthor } from '@/lib/db/queries';
+import { getBook, getChapters, getBooksByAuthor, getCurrentUser, getBookAccessStatus, type BookAccessStatus } from '@/lib/db/queries';
+import { BuyButton } from '@/components/book/buy-button';
 
 function estimateReadingTime(wordCount: number): number {
   return Math.max(1, Math.ceil(wordCount / 250));
@@ -24,12 +25,17 @@ export default async function BookDetailPage({
     notFound();
   }
 
-  const [chapters, otherBooks] = await Promise.all([
+  const user = await getCurrentUser();
+  const [chapters, otherBooks, accessStatus] = await Promise.all([
     getChapters(id),
     getBooksByAuthor(book.author_id),
+    user
+      ? getBookAccessStatus(user.id, id)
+      : (Number(book.price) === 0 ? 'free' as BookAccessStatus : 'requires_purchase' as BookAccessStatus),
   ]);
 
   const author = book.authors;
+  const canRead = accessStatus !== 'requires_purchase';
 
   return (
     <div className="min-h-screen bg-[#0a0a0a]">
@@ -120,16 +126,22 @@ export default async function BookDetailPage({
 
                 {/* CTA Buttons */}
                 <div className="flex flex-col gap-3 sm:flex-row">
-                  <Link href={`/book/${book.id}/read`} className="flex-1 sm:flex-none">
-                    <Button className="w-full bg-violet-500 hover:bg-violet-600 text-white sm:w-auto">
-                      Start Reading
-                    </Button>
-                  </Link>
-                  <Link href={`/book/${book.id}/chat`} className="flex-1 sm:flex-none">
-                    <Button variant="outline" className="w-full border-[#27272a] text-white hover:bg-[#141414] sm:w-auto">
-                      Talk to this Book
-                    </Button>
-                  </Link>
+                  {canRead ? (
+                    <Link href={`/book/${book.id}/read`} className="flex-1 sm:flex-none">
+                      <Button className="w-full bg-violet-500 hover:bg-violet-600 text-white sm:w-auto">
+                        {accessStatus === 'purchased' ? 'Continue Reading' : 'Start Reading'}
+                      </Button>
+                    </Link>
+                  ) : (
+                    <BuyButton bookId={book.id} price={Number(book.price)} />
+                  )}
+                  {canRead && (
+                    <Link href={`/book/${book.id}/chat`} className="flex-1 sm:flex-none">
+                      <Button variant="outline" className="w-full border-[#27272a] text-white hover:bg-[#141414] sm:w-auto">
+                        Talk to this Book
+                      </Button>
+                    </Link>
+                  )}
                 </div>
               </div>
             </div>

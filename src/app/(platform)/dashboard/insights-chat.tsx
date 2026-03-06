@@ -14,6 +14,7 @@ import {
   Image,
   FileText,
   Twitter,
+  DollarSign,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ToolResult } from '@/components/chat/tool-results'
@@ -25,6 +26,7 @@ interface InsightsChatProps {
 
 const QUICK_ACTIONS = [
   { icon: BarChart3, label: 'Show engagement trends', category: 'analytics' as const },
+  { icon: DollarSign, label: 'Show my P&L', category: 'analytics' as const },
   { icon: Image, label: 'Create an infographic', category: 'create' as const },
   { icon: FileText, label: 'Format for Substack', category: 'share' as const },
   { icon: Twitter, label: 'Create a tweet thread', category: 'share' as const },

@@ -176,6 +176,7 @@ ${citedPassages || 'No cited passages yet.'}
 
 YOU HAVE TOOLS AVAILABLE:
 - getAnalytics: Fetch engagement trends, chapter stats, period comparisons. Use when asked about trends, analytics, performance, engagement.
+- getRevenue: Fetch revenue and P&L data with cost breakdowns. Use when asked about earnings, revenue, sales, costs, P&L, profits, or financial performance.
 - getChapterContent: Fetch full chapter text. Use before formatting or generating infographics.
 - generateInfographic: Create a visual infographic from chapter content. Ask the user which chapter and style if not specified.
 - formatChapter: Format a chapter for Substack, Twitter/X thread, or email newsletter. Use when asked to share, export, or publish content.
@@ -493,6 +494,86 @@ GUIDELINES:
     },
   })
 
+  const getRevenueTool = tool({
+    description: 'Fetch revenue, costs, and P&L data for the author. Returns per-book cost breakdowns (AI, storage, infra), revenue, net profit, and author/platform shares. Use when asked about earnings, revenue, sales, costs, P&L, profits, or financial performance.',
+    inputSchema: z.object({
+      bookId: z.string().optional().describe('Specific book ID to get P&L for. If omitted, returns P&L for all books.'),
+      period: z.enum(['7d', '30d', '90d']).default('30d').describe('Time period for revenue data'),
+    }),
+    execute: async ({ bookId, period }) => {
+      const days = periodToDays(period)
+
+      if (bookId) {
+        // Single book P&L
+        const { data: bookCheck } = await db
+          .from('books')
+          .select('id')
+          .eq('id', bookId)
+          .eq('author_id', authorId)
+          .single()
+
+        if (!bookCheck) {
+          return { error: 'Book not found or does not belong to this author.' }
+        }
+
+        const { getBookPnL } = await import('@/lib/db/queries/costs')
+        const pnl = await getBookPnL(bookId, days)
+        return {
+          type: 'book_pnl' as const,
+          period,
+          book: {
+            title: pnl.bookTitle,
+            price: pnl.price,
+            revenue: pnl.revenue,
+            orderCount: pnl.orderCount,
+            costs: {
+              ai: pnl.costs.aiCost,
+              storage: pnl.costs.storageCost,
+              infra: pnl.costs.infraCost,
+              embedding: pnl.costs.embeddingCost,
+              total: pnl.costs.total,
+            },
+            netProfit: pnl.netProfit,
+            authorShare: pnl.authorShare,
+            platformShare: pnl.platformShare,
+          },
+        }
+      }
+
+      // Author-wide P&L
+      const { getAuthorPnL: fetchAuthorPnL } = await import('@/lib/db/queries/costs')
+      const pnl = await fetchAuthorPnL(authorId, days)
+      return {
+        type: 'author_pnl' as const,
+        period,
+        books: pnl.books.map(b => ({
+          title: b.bookTitle,
+          price: b.price,
+          revenue: b.revenue,
+          orderCount: b.orderCount,
+          costs: {
+            ai: b.costs.aiCost,
+            storage: b.costs.storageCost,
+            infra: b.costs.infraCost,
+            embedding: b.costs.embeddingCost,
+            total: b.costs.total,
+          },
+          netProfit: b.netProfit,
+          authorShare: b.authorShare,
+          platformShare: b.platformShare,
+        })),
+        totals: {
+          revenue: pnl.totals.revenue,
+          totalCosts: pnl.totals.totalCosts,
+          netProfit: pnl.totals.netProfit,
+          authorShare: pnl.totals.authorShare,
+          platformShare: pnl.totals.platformShare,
+        },
+        splitLiberaiPct: pnl.splitLiberaiPct,
+      }
+    },
+  })
+
   // ─── Stream response ──────────────────────────────────────
 
   try {
@@ -502,12 +583,29 @@ GUIDELINES:
       messages,
       tools: {
         getAnalytics: getAnalyticsTool,
+        getRevenue: getRevenueTool,
         getChapterContent: getChapterContentTool,
         generateInfographic: generateInfographicTool,
         formatChapter: formatChapterTool,
       },
       stopWhen: stepCountIs(3),
       temperature: 0.7,
+      onFinish: async ({ text, usage }) => {
+        // Log author-chat messages with token usage for cost tracking
+        try {
+          await db.from('chat_messages').insert({
+            conversation_id: authorId, // Use authorId as a stable identifier
+            role: 'assistant',
+            content: text.slice(0, 10000),
+            model_used: 'gemini',
+            input_tokens: usage?.inputTokens || null,
+            output_tokens: usage?.outputTokens || null,
+            cited_chunk_ids: [],
+          })
+        } catch (e) {
+          console.error('Failed to log author-chat usage:', e)
+        }
+      },
     })
 
     return result.toUIMessageStreamResponse()

@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import {
   Plus, MessageSquare, Eye, ArrowRight, BookOpen,
-  Clock, BarChart3, Zap,
+  Clock, BarChart3, Zap, DollarSign, ShoppingCart, Settings,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { formatNumber } from '@/lib/utils'
@@ -12,6 +12,8 @@ import {
   getAuthorDashboardBooks,
   getAuthorRecentConversations,
 } from '@/lib/db/queries'
+import { getAuthorRevenueSummary } from '@/lib/db/queries/revenue'
+import { getAuthorPnL } from '@/lib/db/queries/costs'
 import { AuthorOnboarding } from './author-onboarding'
 import { InsightsChat } from './insights-chat'
 
@@ -30,9 +32,11 @@ export default async function DashboardPage() {
     return <AuthorOnboarding defaultName={defaultName} />
   }
 
-  const [books, conversations] = await Promise.all([
+  const [books, conversations, revenueSummary, pnl] = await Promise.all([
     getAuthorDashboardBooks(author.id),
     getAuthorRecentConversations(author.id),
+    getAuthorRevenueSummary(author.id),
+    getAuthorPnL(author.id),
   ])
 
   const totalReads = books.reduce(
@@ -61,15 +65,23 @@ export default async function DashboardPage() {
             </div>
           </div>
 
-          <Link href="/dashboard/new-book">
-            <Button
-              size="sm"
-              className="h-8 bg-violet-500 px-3 text-xs font-medium text-white hover:bg-violet-600"
-            >
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              New Book
-            </Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link href="/dashboard/settings">
+              <button className="flex h-8 items-center gap-1.5 rounded-md border border-[#27272a] bg-[#0e0e0e] px-3 text-[11px] text-zinc-400 transition-colors hover:border-zinc-600 hover:text-white">
+                <Settings className="h-3.5 w-3.5" />
+                Settings
+              </button>
+            </Link>
+            <Link href="/dashboard/new-book">
+              <Button
+                size="sm"
+                className="h-8 bg-violet-500 px-3 text-xs font-medium text-white hover:bg-violet-600"
+              >
+                <Plus className="mr-1.5 h-3.5 w-3.5" />
+                New Book
+              </Button>
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -100,6 +112,31 @@ export default async function DashboardPage() {
                 icon={<BookOpen className="h-4 w-4" />}
                 accent="text-emerald-400"
                 bg="bg-emerald-500/8"
+              />
+            </div>
+
+            {/* Earnings row */}
+            <div className="mb-6 grid grid-cols-3 gap-3">
+              <StatTile
+                label="Net Earnings"
+                value={`$${pnl.totals.authorShare.toFixed(2)}`}
+                icon={<DollarSign className="h-4 w-4" />}
+                accent="text-emerald-400"
+                bg="bg-emerald-500/8"
+              />
+              <StatTile
+                label="Total Sales"
+                value={String(revenueSummary.totalOrders)}
+                icon={<ShoppingCart className="h-4 w-4" />}
+                accent="text-amber-400"
+                bg="bg-amber-500/8"
+              />
+              <StatTile
+                label="Gross Revenue"
+                value={`$${revenueSummary.totalRevenue.toFixed(2)}`}
+                icon={<BarChart3 className="h-4 w-4" />}
+                accent="text-blue-400"
+                bg="bg-blue-500/8"
               />
             </div>
 

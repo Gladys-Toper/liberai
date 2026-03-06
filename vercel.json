@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/aggregate-costs",
+      "schedule": "0 6 * * *"
+    }
+  ]
+}

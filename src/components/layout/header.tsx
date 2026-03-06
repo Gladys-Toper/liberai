@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { BookOpen, Search, Menu, X, ChevronDown, LogOut, User, LayoutDashboard } from 'lucide-react'
+import { BookOpen, Search, Menu, X, ChevronDown, LogOut, User, LayoutDashboard, Shield } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Avatar } from '@/components/ui/avatar'
@@ -23,13 +23,22 @@ export function Header() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [searchExpanded, setSearchExpanded] = useState(false)
   const [user, setUser] = useState<SupabaseUser | null>(null)
+  const [isAdmin, setIsAdmin] = useState(false)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const supabase = createClient()
 
-    supabase.auth.getUser().then(({ data: { user } }) => {
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
       setUser(user)
+      if (user) {
+        const { data } = await supabase
+          .from('users')
+          .select('role')
+          .eq('id', user.id)
+          .single()
+        setIsAdmin(data?.role === 'admin')
+      }
       setLoading(false)
     })
 
@@ -89,6 +98,19 @@ export function Header() {
                 {link.label}
               </Link>
             ))}
+            {isAdmin && (
+              <Link
+                href="/admin"
+                className={cn(
+                  'px-3 py-2 text-sm font-medium transition-colors',
+                  isActive('/admin')
+                    ? 'text-violet-400'
+                    : 'text-zinc-400 hover:text-white'
+                )}
+              >
+                Admin
+              </Link>
+            )}
           </nav>
 
           {/* Search Bar */}
@@ -116,7 +138,7 @@ export function Header() {
             {loading ? (
               <div className="h-8 w-8 animate-pulse rounded-full bg-[#27272a]" />
             ) : user ? (
-              <div className="hidden sm:block relative">
+              <div className="hidden sm:block">
                 <DropdownMenu>
                   <DropdownMenuTrigger className="flex items-center gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-[#27272a]">
                     <Avatar
@@ -127,7 +149,7 @@ export function Header() {
                     />
                     <ChevronDown className="h-4 w-4 text-zinc-500" />
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent className="absolute right-0 top-2 w-48">
+                  <DropdownMenuContent className="w-48">
                     <div className="px-4 py-2 border-b border-[#27272a]">
                       <p className="text-sm font-medium text-white truncate">
                         {user.user_metadata?.full_name || 'User'}
@@ -138,10 +160,16 @@ export function Header() {
                       <LayoutDashboard className="h-4 w-4" />
                       Dashboard
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => router.push('/settings')}>
+                    <DropdownMenuItem onClick={() => router.push('/dashboard/settings')}>
                       <User className="h-4 w-4" />
                       Settings
                     </DropdownMenuItem>
+                    {isAdmin && (
+                      <DropdownMenuItem onClick={() => router.push('/admin')}>
+                        <Shield className="h-4 w-4" />
+                        Admin
+                      </DropdownMenuItem>
+                    )}
                     <DropdownMenuItem destructive onClick={handleSignOut}>
                       <LogOut className="h-4 w-4" />
                       Sign out

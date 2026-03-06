@@ -23,6 +23,7 @@ export default function NewBookPage() {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [genre, setGenre] = useState('general')
+  const [price, setPrice] = useState('')
   const [uploading, setUploading] = useState(false)
   const [success, setSuccess] = useState(false)
   const [result, setResult] = useState<UploadResult | null>(null)
@@ -39,6 +40,7 @@ export default function NewBookPage() {
     if (title) formData.append('title', title)
     if (description) formData.append('description', description)
     if (genre) formData.append('genre', genre)
+    if (price) formData.append('price', price)
 
     try {
       const res = await fetch('/api/upload', {
@@ -128,6 +130,7 @@ export default function NewBookPage() {
                   setTitle('')
                   setDescription('')
                   setGenre('general')
+                  setPrice('')
                   setSuccess(false)
                   setResult(null)
                 }}
@@ -206,6 +209,26 @@ export default function NewBookPage() {
                       </option>
                     ))}
                   </select>
+                </div>
+
+                <div>
+                  <label htmlFor="price" className="mb-1.5 block text-sm font-medium text-zinc-300">
+                    Price (USD)
+                  </label>
+                  <Input
+                    id="price"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={price}
+                    onChange={(e) => setPrice(e.target.value)}
+                    placeholder="0.00 (free)"
+                    disabled={uploading}
+                    className="border-[#27272a] bg-[#0a0a0a] text-white placeholder:text-zinc-600 focus:border-violet-500"
+                  />
+                  <p className="mt-1 text-xs text-zinc-600">
+                    Set to 0 or leave blank for free. Readers pay with USDC stablecoin on Base.
+                  </p>
                 </div>
               </div>
             </Card>
