@@ -3,6 +3,10 @@
 // Converts a completed debate transcript (rounds, axioms, arguments, commentary)
 // into an array of SceneChunks, each with a rich video prompt for LTX 2.3.
 //
+// IMPORTANT: Because we use LTX's extend endpoint, each chunk (after the first)
+// describes what happens NEXT — a continuation from the previous scene's last frame.
+// The prompts must never re-describe the full setting, only the new action/camera move.
+//
 // LTX generates video + lip-synced speech natively. Dialogue in quotation marks
 // → synthesized speech with accent and emotion.
 
@@ -16,16 +20,13 @@ import type {
 } from '@/lib/agents/debate-engine'
 import type { SceneChunk } from './timeline-sync'
 
-// ─── Oxford Union Visual Style ───────────────────────────────────
+// ─── Oxford Union Visual Style (used ONLY for the first scene) ───
 
-const OXFORD_UNION_STYLE = `An Oxford Union-style debating chamber with dark wood paneling, leather benches, warm amber lighting, and a packed audience. Two podiums face each other at center stage. A commentator desk sits to the right. The atmosphere is electric — think BBC Parliament meets Fight Night. Cinematic 35mm film look, shallow depth of field, dramatic lighting.`
+const ESTABLISHING_SCENE = `A grand Oxford Union debating chamber, dark oak paneling, leather benches, warm amber spotlights, packed audience. Two podiums center stage. A commentator desk stage-right. Cinematic 35mm film, shallow depth of field, dramatic lighting.`
 
-const CHARACTER_DESCRIPTIONS = {
-  debaterA: `A commanding figure at the left podium, dressed in a dark tailored suit. Passionate, gestures emphatically. British-accented voice with intellectual gravitas.`,
-  debaterB: `A sharp figure at the right podium, dressed in a contrasting charcoal suit. Measured, precise. Speaks with a clear, authoritative American accent.`,
-  commentator: `A charismatic commentator at a desk stage-right, dressed in a waistcoat. Speaks with the energy of a boxing commentator who studied philosophy at Cambridge. Excited, witty.`,
-  referee: `A stern-faced referee in academic robes, standing center-stage between the podiums. Speaks with impartial authority.`,
-}
+// ─── Valid LTX camera_motion values ──────────────────────────────
+// dolly_in | dolly_out | dolly_left | dolly_right
+// jib_up | jib_down | static | focus_shift
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -46,8 +47,9 @@ export interface DebateTranscript {
 /**
  * Convert a completed debate into SceneChunks for video generation.
  *
- * We use an LLM to write the screenplay dialogue, but the chunk structure
- * (timing, HP, damage metadata) is deterministic from debate data.
+ * The FIRST chunk establishes the setting (used with generateFirst).
+ * All subsequent chunks describe only the NEXT action (used with extendVideo).
+ * This creates one seamless, continuous video.
  */
 export async function generateScreenplay(
   transcript: DebateTranscript,
@@ -60,22 +62,21 @@ export async function generateScreenplay(
   const chunks: SceneChunk[] = []
   let chunkIndex = 0
 
-  // ── Intro Scene ──
+  // ── Scene 1: Establishing shot + Intro (generateFirst) ──
   chunks.push({
     index: chunkIndex++,
-    durationSeconds: 20,
+    durationSeconds: 10,
     roundNumber: 0,
     sceneType: 'intro',
     videoPrompt: buildIntroPrompt(transcript, dialogue.intro),
-    cameraMotion: 'slow_dolly_in',
+    cameraMotion: 'dolly_in',
     hpA: totalHp(axiomsA),
     hpB: totalHp(axiomsB),
     hpPercentA: 100,
     hpPercentB: 100,
   })
 
-  // ── Round Scenes (attack + defense per round) ──
-  // Track running HP for timeline sync
+  // ── Round Scenes (extend from previous) ──
   let runningAxiomsA = axiomsA.map((a) => ({ ...a }))
   let runningAxiomsB = axiomsB.map((a) => ({ ...a }))
 
@@ -91,7 +92,7 @@ export async function generateScreenplay(
       commentary: '',
     }
 
-    // Apply HP deltas to running state
+    // Apply HP deltas
     for (const delta of round.hp_deltas) {
       const axiomA = runningAxiomsA.find((a) => a.id === delta.axiom_id)
       const axiomB = runningAxiomsB.find((a) => a.id === delta.axiom_id)
@@ -110,7 +111,6 @@ export async function generateScreenplay(
     const maxHpA = axiomsA.length * 100
     const maxHpB = axiomsB.length * 100
 
-    // Primary damage target
     const primaryDelta = round.hp_deltas[0]
     const targetSide = round.attacker_side === 'a' ? 'b' : 'a'
     const damagedAxiom = primaryDelta
@@ -119,19 +119,19 @@ export async function generateScreenplay(
         )
       : undefined
 
-    // Attack scene
+    // Attack continuation
     chunks.push({
       index: chunkIndex++,
-      durationSeconds: 20,
+      durationSeconds: 10,
       roundNumber: round.round_number,
       sceneType: 'attack',
-      videoPrompt: buildAttackPrompt(
+      videoPrompt: buildAttackContinuation(
         transcript,
         round,
         attack,
         roundDialogue.attack,
       ),
-      cameraMotion: 'tracking_shot',
+      cameraMotion: round.round_number % 2 === 1 ? 'dolly_left' : 'dolly_right',
       hpA,
       hpB,
       hpPercentA: Math.round((hpA / maxHpA) * 100),
@@ -146,30 +146,30 @@ export async function generateScreenplay(
       commentary: round.commentary || undefined,
     })
 
-    // Defense scene (if there's a defense argument and we have room)
+    // Defense continuation
     if (defense && roundDialogue.defense) {
       chunks.push({
         index: chunkIndex++,
-        durationSeconds: 20,
+        durationSeconds: 10,
         roundNumber: round.round_number,
         sceneType: 'defense',
-        videoPrompt: buildDefensePrompt(
+        videoPrompt: buildDefenseContinuation(
           transcript,
           round,
           defense,
           roundDialogue.defense,
         ),
-        cameraMotion: 'slow_pan_right',
+        cameraMotion: 'focus_shift',
         hpA,
         hpB,
         hpPercentA: Math.round((hpA / maxHpA) * 100),
         hpPercentB: Math.round((hpB / maxHpB) * 100),
-        targetSide: round.attacker_side, // defender is the attacker's target side
+        targetSide: round.attacker_side,
       })
     }
   }
 
-  // ── Verdict / Outro Scene ──
+  // ── Verdict continuation ──
   const winner =
     session.winner === 'a'
       ? 'a'
@@ -179,11 +179,11 @@ export async function generateScreenplay(
 
   chunks.push({
     index: chunkIndex++,
-    durationSeconds: 20,
+    durationSeconds: 10,
     roundNumber: rounds.length,
     sceneType: 'verdict',
-    videoPrompt: buildVerdictPrompt(transcript, dialogue.verdict, winner),
-    cameraMotion: 'slow_dolly_out',
+    videoPrompt: buildVerdictContinuation(transcript, dialogue.verdict, winner),
+    cameraMotion: 'dolly_out',
     hpA: totalHp(runningAxiomsA),
     hpB: totalHp(runningAxiomsB),
     hpPercentA: Math.round(
@@ -214,7 +214,6 @@ async function generateDialogue(
 ): Promise<ScreenplayDialogue> {
   const { session, rounds, arguments: args } = transcript
 
-  // Build a condensed transcript for the LLM
   const roundSummaries = rounds
     .filter((r) => r.status === 'completed')
     .map((r) => {
@@ -233,41 +232,40 @@ async function generateDialogue(
     })
     .join('\n\n')
 
-  const prompt = `You are a theatrical screenwriter. Convert this philosophical debate transcript into dramatic spoken dialogue for a cinematic Oxford Union stage play.
+  const prompt = `You are a theatrical screenwriter writing dialogue for a cinematic Oxford Union debate broadcast. This will be rendered as a single continuous video — each scene extends seamlessly from the last.
 
 DEBATE:
   Book A: "${transcript.bookATitle}" by ${transcript.bookAAuthor}
   Book B: "${transcript.bookBTitle}" by ${transcript.bookBAuthor}
-  Crucible Question: "${session.crucible_question}"
+  Topic: "${session.crucible_question}"
   Winner: ${session.winner === 'a' ? transcript.bookATitle : session.winner === 'b' ? transcript.bookBTitle : 'Draw'}
 
 TRANSCRIPT:
 ${roundSummaries}
 
 INSTRUCTIONS:
-Write dialogue for each scene. Each line of dialogue must be in quotation marks — the video model will lip-sync these.
+Write SHORT spoken dialogue for each scene. Put all speech in quotation marks (the video model lip-syncs quoted text).
 
 For each round, write:
-- attack: 2-3 sentences the attacker speaks at their podium (passionate, specific to their argument)
-- defense: 1-2 sentences the defender speaks in rebuttal
-- commentary: 1-2 sentences the commentator says from their desk (dramatic, witty)
+- attack: 1-2 sentences the speaker says at their podium (under 15 words)
+- defense: 1 sentence rebuttal (under 12 words)
+- commentary: 1 sentence commentator reaction (under 12 words, excited/witty)
 
 Also write:
-- intro: Commentator's opening 3-4 sentences introducing the debate
-- verdict: Referee's announcement + commentator's closing 2-3 sentences
+- intro: Commentator's 1-2 sentence opening (under 20 words total)
+- verdict: Referee announcement + commentator sign-off (under 20 words total)
 
-Keep dialogue concise (each speech under 30 words) — these are 20-second video scenes.
-Use vivid philosophical language but keep it accessible.
-Mark emotion/tone in parentheses before dialogue: (thundering), (quietly devastating), (with growing excitement).
+CRITICAL: Keep ALL dialogue extremely short. Each scene is only 10 seconds of video.
+Use academic/philosophical language. No profanity or violent imagery.
 
 Respond with valid JSON:
 {
-  "intro": "string — commentator's opening",
+  "intro": "string",
   "rounds": {
     "1": { "attack": "string", "defense": "string", "commentary": "string" },
     "2": { ... }
   },
-  "verdict": "string — referee + commentator finale"
+  "verdict": "string"
 }`
 
   const { text } = await generateText({
@@ -276,7 +274,6 @@ Respond with valid JSON:
     temperature: 0.7,
   })
 
-  // Parse JSON response (strip markdown code fences if present)
   const cleaned = text
     .replace(/^```(?:json)?\s*\n?/m, '')
     .replace(/\n?```\s*$/m, '')
@@ -284,115 +281,61 @@ Respond with valid JSON:
 }
 
 // ─── Prompt Builders ─────────────────────────────────────────────
+// Scene 1 (intro): Full establishing shot — used with generateFirst()
+// Scene 2+: Continuation prompts — used with extendVideo()
+//   These describe ONLY what changes next (new speaker, camera move, reaction)
+//   They NEVER re-describe the full setting.
 
 function buildIntroPrompt(
   t: DebateTranscript,
   introDialogue: string,
 ): string {
-  return `${OXFORD_UNION_STYLE}
+  return `${ESTABLISHING_SCENE}
 
-Scene: The camera slowly dollies into the debating chamber. The audience murmurs with anticipation. Two podiums are lit by amber spotlights. A commentator sits at a desk stage-right.
-
-${CHARACTER_DESCRIPTIONS.commentator}
-
-The commentator turns to camera and speaks:
+The camera dollies in through the entrance. A charismatic commentator in a waistcoat sits at a desk stage-right. They turn to the camera and speak:
 ${introDialogue}
 
-On-screen text appears: "${t.bookATitle}" vs "${t.bookBTitle}"
-The crucible question: "${t.session.crucible_question}"
-
-Ambient sound: murmuring crowd, wooden benches creaking, dramatic orchestral score building.`
+Ambient: murmuring crowd, orchestral score swelling.`
 }
 
-function buildAttackPrompt(
+function buildAttackContinuation(
   t: DebateTranscript,
   round: DebateRound,
   attack: DebateArgument | undefined,
   dialogue: string,
 ): string {
-  const attackerDesc =
-    round.attacker_side === 'a'
-      ? CHARACTER_DESCRIPTIONS.debaterA
-      : CHARACTER_DESCRIPTIONS.debaterB
-  const bookTitle =
-    round.attacker_side === 'a' ? t.bookATitle : t.bookBTitle
+  const side = round.attacker_side === 'a' ? 'left' : 'right'
+  const hasBigHit = round.hp_deltas.some((d) => Math.abs(d.delta) > 15)
 
-  const hasBigDamage = round.hp_deltas.some((d) => Math.abs(d.delta) > 15)
-  const axiomDestroyed = round.hp_deltas.some(
-    (d) =>
-      [...t.axiomsA, ...t.axiomsB].find((a) => a.id === d.axiom_id)
-        ?.is_destroyed,
-  )
-
-  return `${OXFORD_UNION_STYLE}
-
-Scene: Round ${round.round_number}. The champion of "${bookTitle}" rises from their bench and strides to the podium. Close-up on their face — determined, intense.
-
-${attackerDesc}
-
-The attacker grips the podium and speaks with conviction:
+  return `Continuing in the same debating chamber. The camera pans to the ${side} podium. A speaker in a tailored suit rises and addresses the chamber:
 ${dialogue}
-
-${hasBigDamage ? 'The audience gasps. A devastating blow.' : 'The audience leans forward, absorbing every word.'}
-${axiomDestroyed ? 'DRAMATIC MOMENT: An axiom has been destroyed! The crowd erupts. Camera pulls back to show the full chamber in shock.' : ''}
-
-Camera: Tracking shot from the attacker's profile to a frontal close-up as they deliver their key point.
-Ambient sound: ${axiomDestroyed ? 'Dramatic orchestral hit, crowd eruption' : 'tense silence, occasional murmur, pen scratching'}.`
+${hasBigHit ? 'The audience reacts with audible gasps.' : 'The audience listens intently.'}
+Ambient: ${hasBigHit ? 'dramatic tension, crowd murmur' : 'quiet attention, pen scratching'}.`
 }
 
-function buildDefensePrompt(
+function buildDefenseContinuation(
   t: DebateTranscript,
   round: DebateRound,
   defense: DebateArgument,
   dialogue: string,
 ): string {
-  const defenderSide = round.attacker_side === 'a' ? 'b' : 'a'
-  const defenderDesc =
-    defenderSide === 'a'
-      ? CHARACTER_DESCRIPTIONS.debaterA
-      : CHARACTER_DESCRIPTIONS.debaterB
-  const bookTitle = defenderSide === 'a' ? t.bookATitle : t.bookBTitle
+  const side = round.attacker_side === 'a' ? 'right' : 'left'
 
-  return `${OXFORD_UNION_STYLE}
-
-Scene: The defender for "${bookTitle}" stands, composed after absorbing the attack. They adjust their notes and approach the podium.
-
-${defenderDesc}
-
-The defender speaks with measured precision:
+  return `The camera shifts focus to the ${side} podium. The opposing speaker stands calmly and delivers a measured response:
 ${dialogue}
-
-The audience nods. A strong rebuttal. Camera slow-pans to show both debaters in frame — the tension between them palpable.
-
-Camera: Slow pan from defender to attacker's reaction, then wide shot of the chamber.
-Ambient sound: approving murmur, leather creaking, gentle applause.`
+The audience nods. Both speakers are now visible in a wide two-shot.
+Ambient: approving murmur, gentle applause.`
 }
 
-function buildVerdictPrompt(
+function buildVerdictContinuation(
   t: DebateTranscript,
   verdictDialogue: string,
   winner: 'a' | 'b' | 'draw',
 ): string {
-  const winnerBook =
-    winner === 'a'
-      ? t.bookATitle
-      : winner === 'b'
-        ? t.bookBTitle
-        : 'a draw'
-
-  return `${OXFORD_UNION_STYLE}
-
-Scene: Final verdict. The chamber falls silent. The referee in academic robes steps to center stage. Both debaters stand at their podiums, awaiting judgment.
-
-${CHARACTER_DESCRIPTIONS.referee}
-
+  return `The chamber falls quiet. A figure in academic robes steps to center stage between the podiums. They raise one hand and announce the verdict:
 ${verdictDialogue}
-
-${winner !== 'draw' ? `The champion of "${winnerBook}" raises a fist in triumph. The crowd stands and applauds.` : 'Both debaters bow to each other. The crowd gives a standing ovation.'}
-
-The commentator turns to camera for final words.
-Camera: Wide establishing shot of the full chamber, then slow dolly out through the doors as applause echoes.
-Ambient sound: thunderous applause, dramatic orchestral finale, chamber doors closing.`
+${winner !== 'draw' ? 'One speaker raises their hand in acknowledgment. The audience stands, applauding.' : 'Both speakers bow to each other. Standing ovation.'}
+The camera slowly pulls back through the chamber doors. Ambient: thunderous applause, orchestral finale.`
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────

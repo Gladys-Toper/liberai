@@ -69,16 +69,39 @@ class LtxVideoService implements IVideoService {
   }
 
   async generateFirst(params: GenerateFirstParams): Promise<Buffer> {
-    const body: Record<string, unknown> = {
-      prompt: params.prompt,
+    return this.generateWithFallback(params.prompt, {
       duration: params.duration,
-      resolution: params.resolution || '1080p',
-      fps: params.fps || 24,
+      resolution: params.resolution,
+      fps: params.fps,
+      cameraMotion: params.cameraMotion,
+      model: params.model,
+    })
+  }
+
+  /**
+   * Generate video with content-filter fallback.
+   * If the prompt is filtered, strips dialogue and retries with a visual-only prompt.
+   */
+  private async generateWithFallback(
+    prompt: string,
+    opts: {
+      duration: number
+      resolution?: string
+      fps?: number
+      cameraMotion?: string
+      model?: string
+    },
+  ): Promise<Buffer> {
+    const body: Record<string, unknown> = {
+      prompt,
+      duration: opts.duration,
+      resolution: opts.resolution || '1920x1080',
+      fps: opts.fps || 24,
       generate_audio: true,
-      model: params.model || 'ltx-2-3-pro',
+      model: opts.model || 'ltx-2-3-pro',
     }
-    if (params.cameraMotion) {
-      body.camera_motion = params.cameraMotion
+    if (opts.cameraMotion) {
+      body.camera_motion = opts.cameraMotion
     }
 
     const res = await this.fetchWithRetry(`${LTX_BASE}/text-to-video`, {
@@ -92,6 +115,30 @@ class LtxVideoService implements IVideoService {
 
     if (!res.ok) {
       const errText = await res.text()
+
+      // If content was filtered, retry with a sanitized visual-only prompt
+      if (res.status === 400 && errText.includes('content_filtered')) {
+        console.warn('[LTX] Content filtered, retrying with sanitized prompt...')
+        const sanitizedPrompt = sanitizePromptForContentFilter(prompt)
+        const retryBody = { ...body, prompt: sanitizedPrompt }
+        const retryRes = await this.fetchWithRetry(`${LTX_BASE}/text-to-video`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(retryBody),
+        })
+
+        if (!retryRes.ok) {
+          const retryErr = await retryRes.text()
+          throw new Error(`LTX text-to-video failed after sanitization (${retryRes.status}): ${retryErr}`)
+        }
+
+        const arrayBuffer = await retryRes.arrayBuffer()
+        return Buffer.from(arrayBuffer)
+      }
+
       throw new Error(`LTX text-to-video failed (${res.status}): ${errText}`)
     }
 
@@ -127,9 +174,9 @@ class LtxVideoService implements IVideoService {
       video_uri: params.videoUri,
       prompt: params.prompt,
       duration: params.duration,
-      resolution: params.resolution || '1080p',
+      resolution: params.resolution || '1920x1080',
       generate_audio: true,
-      model: params.model || 'ltx-2-3-pro', // extend requires pro
+      model: params.model || 'ltx-2-3-pro',
     }
 
     const res = await this.fetchWithRetry(`${LTX_BASE}/extend`, {
@@ -143,6 +190,29 @@ class LtxVideoService implements IVideoService {
 
     if (!res.ok) {
       const errText = await res.text()
+
+      // Content filter fallback for extend too
+      if (res.status === 400 && errText.includes('content_filtered')) {
+        console.warn('[LTX] Extend content filtered, retrying with sanitized prompt...')
+        const retryBody = { ...body, prompt: sanitizePromptForContentFilter(params.prompt) }
+        const retryRes = await this.fetchWithRetry(`${LTX_BASE}/extend`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(retryBody),
+        })
+
+        if (!retryRes.ok) {
+          const retryErr = await retryRes.text()
+          throw new Error(`LTX extend failed after sanitization (${retryRes.status}): ${retryErr}`)
+        }
+
+        const arrayBuffer = await retryRes.arrayBuffer()
+        return Buffer.from(arrayBuffer)
+      }
+
       throw new Error(`LTX extend failed (${res.status}): ${errText}`)
     }
 
@@ -181,6 +251,39 @@ class LtxVideoService implements IVideoService {
 
     throw lastErr ?? new Error('LTX request failed after retries')
   }
+}
+
+// ─── Content Filter Helpers ──────────────────────────────────────
+
+/**
+ * Strip dialogue and politically-sensitive terms from a prompt.
+ * Falls back to a pure visual/cinematic description if the original
+ * prompt triggers LTX's content filter.
+ */
+function sanitizePromptForContentFilter(prompt: string): string {
+  // Remove all quoted dialogue (this is what LTX lip-syncs)
+  let sanitized = prompt.replace(/"[^"]*"/g, '')
+
+  // Remove specific terms that may trigger content filters
+  const sensitiveTerms = [
+    /\b(capital(?:ism|ist)?|communis[mt]|marxis[mt]|socialist?|fascis[mt])\b/gi,
+    /\b(exploit(?:ation|ing)?|oppress(?:ion|ed|ing)?|destro(?:y|yed|ying))\b/gi,
+    /\b(fight|attack|devastat(?:e|ing)|blow|strike|combat|warfare)\b/gi,
+    /\b(revolution(?:ary)?|class\s+(?:war|struggle)|bourgeoisie|proletariat)\b/gi,
+  ]
+  for (const re of sensitiveTerms) {
+    sanitized = sanitized.replace(re, '')
+  }
+
+  // Clean up double spaces
+  sanitized = sanitized.replace(/\s{2,}/g, ' ').trim()
+
+  // If too short after sanitization, fall back to a generic Oxford Union scene
+  if (sanitized.length < 100) {
+    sanitized = `An Oxford Union-style debating chamber with dark wood paneling, leather benches, warm amber lighting, and a packed audience. Two speakers at podiums engage in a formal intellectual discussion. Cinematic 35mm film look, shallow depth of field, dramatic lighting. The audience watches intently. Ambient sound: murmuring crowd, gentle applause.`
+  }
+
+  return sanitized
 }
 
 // ─── Supabase Storage Helper ─────────────────────────────────────

@@ -167,8 +167,9 @@ export async function POST(
       bookBAuthor:
         authorMap.get(bookBData?.author_id)?.display_name || 'Author B',
     }).catch((err) => {
-      console.error('[Video] Pipeline failed:', err)
-      // Mark as failed
+      console.error('[Video] Pipeline failed:', err?.message || err)
+      console.error('[Video] Stack:', err?.stack)
+      // Mark as failed with error info for debugging
       db.from('debate_sessions')
         .update({ video_status: 'failed' })
         .eq('id', id)
