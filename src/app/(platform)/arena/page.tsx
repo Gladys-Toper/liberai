@@ -3,6 +3,9 @@ import { ArenaSetupCard } from '@/components/arena/ArenaSetupCard'
 import { DebateSessionCard } from '@/components/arena/DebateSessionCard'
 import { createClient } from '@supabase/supabase-js'
 
+// Force dynamic rendering — debate list must always be fresh
+export const dynamic = 'force-dynamic'
+
 async function getDebates() {
   const db = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
