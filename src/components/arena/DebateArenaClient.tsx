@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Play, Pause, Loader2, Flag, Trophy, Monitor, BarChart3 } from 'lucide-react'
+import { Play, Pause, Loader2, Flag, Trophy, Monitor, BarChart3, MessageSquare } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { AxiomPanel } from './AxiomPanel'
 import { BattlefieldGraph } from './BattlefieldGraph'
@@ -98,8 +98,8 @@ interface DebateArenaClientProps {
   isOwner: boolean
 }
 
-// ── Screen Shake CSS ───────────────────────────────────────────────────
-const SHAKE_KEYFRAMES = `
+// ── Screen Shake + Oxford Union CSS ────────────────────────────────────
+const ARENA_STYLES = `
 @keyframes arenaShake {
   0%, 100% { transform: translate(0, 0); }
   10% { transform: translate(-4px, 2px); }
@@ -112,6 +112,15 @@ const SHAKE_KEYFRAMES = `
   80% { transform: translate(1px, -1px); }
   90% { transform: translate(-1px, 0); }
 }
+@keyframes warmFlicker {
+  0%, 100% { opacity: 0.02; }
+  50% { opacity: 0.04; }
+}
+@keyframes candleGlow {
+  0%, 100% { opacity: 0.3; }
+  33% { opacity: 0.5; }
+  66% { opacity: 0.35; }
+}
 `
 
 // ── Main Component ─────────────────────────────────────────────────────
@@ -122,7 +131,7 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
   const [autoPlay, setAutoPlay] = useState(false)
   const [lastDamagedId, setLastDamagedId] = useState<string>()
   const [latestAttack, setLatestAttack] = useState<{ attackerSide: 'a' | 'b'; targetAxiomId: string } | null>(null)
-  const [viewMode, setViewMode] = useState<'video' | 'graph'>('graph')
+  const [viewMode, setViewMode] = useState<'video' | 'graph'>('video')
   const [shaking, setShaking] = useState(false)
   const [walletBalance, setWalletBalance] = useState(1000)
   const [userBet, setUserBet] = useState<{ side: 'a' | 'b'; amount: number; payout: number | null } | null>(null)
@@ -179,7 +188,7 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
           ].filter(Boolean)
         }
       } catch {
-        // AV not available — stay in graph mode
+        // AV not available — stay in video mode with fallbacks
       }
     }
 
@@ -261,7 +270,6 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
     setExecuting(true)
 
     try {
-      // Pass AV session IDs so the backend can pipe TTS audio to Simli avatars
       const roundBody: Record<string, unknown> = {}
       if (avEnabled && avSessions.debaterA?.sessionId) {
         roundBody.avSessions = {
@@ -344,270 +352,386 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
   const winnerBook = session.winner === 'a' ? bookA : session.winner === 'b' ? bookB : null
   const latestCommentary = commentaries.length > 0 ? commentaries[commentaries.length - 1].text : null
 
+  /* ═══════════════════════════════════════════════════════════════════════
+     LAYOUT — matches the user's wireframe exactly:
+
+     ┌───────────┬─────────────────────────┬───────────┐
+     │ Comment.  │  Fighting Game Scoreboard│ Comment.  │
+     │    A      │                          │    B      │
+     │  (PiP)    │                          │  (PiP)    │
+     ├───────────┤                          ├───────────┤
+     │           │ ┌──────┬──────┬──────┐   │           │
+     │  Axiom    │ │Debat.│JUDGE │Debat.│   │  Axiom    │
+     │ Panel A   │ │A vid │      │B vid │   │  Panel B  │
+     │           │ └──────┴──────┴──────┘   │           │
+     ├───────────┴─────────────────────────┴───────────┤
+     │  [Controls] [Shoutcaster Ticker]                 │
+     │  [Battlefield/Graph] [Betting]                   │
+     ├──────────────────────────────────────────────────┤
+     │              Sponsor Chyron                       │
+     └──────────────────────────────────────────────────┘
+     ═══════════════════════════════════════════════════════════════════════ */
+
   return (
     <>
-      <style dangerouslySetInnerHTML={{ __html: SHAKE_KEYFRAMES }} />
+      <style dangerouslySetInnerHTML={{ __html: ARENA_STYLES }} />
 
       <div
-        className="min-h-screen bg-[#0a0a0a]"
-        style={{ animation: shaking ? 'arenaShake 0.5s ease-in-out' : 'none' }}
+        className="min-h-screen relative"
+        style={{
+          animation: shaking ? 'arenaShake 0.5s ease-in-out' : 'none',
+          background: '#080604',
+        }}
       >
-        <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6">
-          {/* Header */}
-          <div className="mb-4 text-center">
-            <p className="text-[10px] uppercase tracking-[0.3em] text-zinc-700 mb-1">
-              Ontological Pugilism Arena
+        {/* ── Oxford Union Background ──────────────────────────────────
+            Rich mahogany wood paneling, warm amber lighting, gothic gravitas */}
+        <div className="fixed inset-0 pointer-events-none z-0">
+          {/* Base dark mahogany */}
+          <div
+            className="absolute inset-0"
+            style={{
+              background: 'radial-gradient(ellipse 120% 80% at 50% 20%, #1a120a 0%, #0d0906 50%, #050302 100%)',
+            }}
+          />
+          {/* Vertical wood paneling */}
+          <div
+            className="absolute inset-0 opacity-[0.04]"
+            style={{
+              backgroundImage: `repeating-linear-gradient(90deg, transparent 0px, transparent 80px, rgba(139,90,43,0.4) 80px, rgba(139,90,43,0.4) 81px, transparent 81px, transparent 82px, rgba(139,90,43,0.2) 82px, rgba(139,90,43,0.2) 83px)`,
+            }}
+          />
+          {/* Horizontal wainscoting line */}
+          <div
+            className="absolute left-0 right-0"
+            style={{
+              top: '60%',
+              height: '2px',
+              background: 'linear-gradient(90deg, transparent 5%, rgba(139,90,43,0.15) 20%, rgba(212,160,23,0.08) 50%, rgba(139,90,43,0.15) 80%, transparent 95%)',
+            }}
+          />
+          {/* Warm overhead light spill */}
+          <div
+            className="absolute top-0 left-1/2 -translate-x-1/2"
+            style={{
+              width: '70%',
+              height: '40%',
+              background: 'radial-gradient(ellipse at center top, rgba(212,160,23,0.04) 0%, transparent 70%)',
+              animation: 'warmFlicker 8s ease-in-out infinite',
+            }}
+          />
+          {/* Corner vignette */}
+          <div
+            className="absolute inset-0"
+            style={{
+              background: 'radial-gradient(ellipse 80% 80% at 50% 50%, transparent 50%, rgba(0,0,0,0.5) 100%)',
+            }}
+          />
+        </div>
+
+        {/* ── Content (above background) ───────────────────────────── */}
+        <div className="relative z-10 mx-auto max-w-[1440px] px-3 py-3 xl:px-5">
+
+          {/* Crucible Question Header */}
+          <div className="mb-3 text-center">
+            <p className="text-[9px] uppercase tracking-[0.4em] text-amber-800/60 mb-0.5"
+               style={{ fontVariant: 'small-caps', letterSpacing: '0.35em' }}>
+              The Oxford Union &mdash; Ontological Pugilism
             </p>
-            <p className="text-sm text-zinc-400 italic max-w-xl mx-auto">
+            <p className="text-sm text-amber-200/50 italic max-w-2xl mx-auto leading-relaxed">
               &ldquo;{session.crucible_question}&rdquo;
             </p>
-          </div>
-
-          {/* Fighting Game Scoreboard */}
-          <div className="mb-4">
-            <FightingGameScoreboard
-              bookA={bookA}
-              bookB={bookB}
-              modelA={modelA}
-              modelB={modelB}
-              hpA={hpPercentA}
-              hpB={hpPercentB}
-              currentRound={session.current_round}
-              maxRounds={session.max_rounds}
-              status={session.status}
-              winner={session.winner}
-            />
           </div>
 
           {/* Winner Banner */}
           <AnimatePresence>
             {isCompleted && winnerBook && (
               <motion.div
-                className="mb-4 rounded-xl p-4 text-center"
+                className="mb-3 rounded-lg p-3 text-center"
                 style={{
-                  background: 'linear-gradient(135deg, rgba(234,179,8,0.1), rgba(234,179,8,0.05))',
-                  border: '1px solid rgba(234,179,8,0.2)',
+                  background: 'linear-gradient(135deg, rgba(234,179,8,0.12), rgba(234,179,8,0.04))',
+                  border: '1px solid rgba(234,179,8,0.25)',
+                  boxShadow: '0 0 30px rgba(234,179,8,0.08)',
                 }}
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
               >
-                <Trophy className="mx-auto h-6 w-6 text-amber-400 mb-2" />
-                <p className="text-lg font-bold text-amber-400">{winnerBook.title} Wins!</p>
-                <p className="text-xs text-zinc-500">Victory by {session.win_condition}</p>
+                <Trophy className="mx-auto h-5 w-5 text-amber-400 mb-1" />
+                <p className="text-base font-bold text-amber-400">{winnerBook.title} Wins!</p>
+                <p className="text-[10px] text-zinc-500">Victory by {session.win_condition}</p>
               </motion.div>
             )}
           </AnimatePresence>
 
           {/* ═══════════════════════════════════════════════════════════
-               OXFORD UNION DEBATE CHAMBER
-               Layout: Commentators (top corners) | Debater A | Judge | Debater B
-               Below: Axiom panels, Shoutcaster, Battlefield, Betting
+               ROW 1 + ROW 2: The Main 3-Column Chamber
+               Left:   Commentator A (top) + Axiom Panel A (bottom)
+               Center: Scoreboard (top) + Debate Stage (bottom)
+               Right:  Commentator B (top) + Axiom Panel B (bottom)
              ═══════════════════════════════════════════════════════════ */}
+          <div
+            className="grid gap-2 xl:gap-3"
+            style={{
+              gridTemplateColumns: 'minmax(180px, 220px) 1fr minmax(180px, 220px)',
+              gridTemplateRows: 'auto 1fr',
+            }}
+          >
+            {/* ── [Row1, Col1] Commentator A PiP ──────────────────── */}
+            <div className="row-span-1">
+              <CommentatorBooth
+                sessionId={avSessions.commentator?.sessionId}
+                iceServers={avSessions.commentator?.iceServers}
+                offer={avSessions.commentator?.offer}
+                latestCommentary={latestCommentary}
+                position="inline"
+                compact
+              />
+            </div>
 
-          {/* ── Debate Chamber: The Main Stage ──────────────────────── */}
-          <div className="relative">
-            {/* Commentator PiP — Top Left */}
-            {latestCommentary && (
-              <div
-                className="absolute top-2 left-2 z-20 w-[160px] xl:w-[200px]"
-                style={{
-                  filter: 'drop-shadow(0 4px 20px rgba(0,0,0,0.8))',
-                }}
-              >
-                <CommentatorBooth
-                  sessionId={avSessions.commentator?.sessionId}
-                  iceServers={avSessions.commentator?.iceServers}
-                  offer={avSessions.commentator?.offer}
-                  latestCommentary={latestCommentary}
-                  position="inline"
-                  compact
-                />
-              </div>
-            )}
+            {/* ── [Row1, Col2] Fighting Game Scoreboard ────────────── */}
+            <div className="row-span-1">
+              <FightingGameScoreboard
+                bookA={bookA}
+                bookB={bookB}
+                modelA={modelA}
+                modelB={modelB}
+                hpA={hpPercentA}
+                hpB={hpPercentB}
+                currentRound={session.current_round}
+                maxRounds={session.max_rounds}
+                status={session.status}
+                winner={session.winner}
+              />
+            </div>
 
-            {/* Commentator PiP — Top Right (mirror, shows text ticker) */}
-            {latestCommentary && (
+            {/* ── [Row1, Col3] Commentator B PiP (Live Commentary) ── */}
+            <div className="row-span-1">
               <div
-                className="absolute top-2 right-2 z-20 w-[160px] xl:w-[200px]"
+                className="rounded-lg border overflow-hidden h-full"
                 style={{
-                  filter: 'drop-shadow(0 4px 20px rgba(0,0,0,0.8))',
+                  background: 'linear-gradient(135deg, rgba(26,18,5,0.9), rgba(13,10,2,0.95))',
+                  borderColor: 'rgba(212,160,23,0.2)',
+                  boxShadow: '0 4px 16px rgba(0,0,0,0.4), 0 0 8px rgba(212,160,23,0.05)',
                 }}
               >
                 <div
-                  className="rounded-lg border overflow-hidden"
+                  className="px-2.5 py-1.5 flex items-center gap-1.5"
                   style={{
-                    background: 'linear-gradient(135deg, #1a1205, #0d0a02)',
-                    borderColor: '#d4a01740',
+                    background: 'linear-gradient(90deg, rgba(212,160,23,0.08), transparent)',
+                    borderBottom: '1px solid rgba(212,160,23,0.12)',
                   }}
                 >
-                  <div className="px-2 py-1 flex items-center gap-1.5 border-b" style={{ borderColor: '#d4a01730' }}>
-                    <div className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                    <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-amber-400/70">
-                      Live Commentary
-                    </span>
-                  </div>
-                  <div className="p-2 max-h-[80px] overflow-hidden">
-                    <p className="text-[9px] leading-[1.4] text-zinc-400 line-clamp-4">
+                  <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                  <MessageSquare className="w-3 h-3 text-amber-500/60" />
+                  <span className="text-[9px] font-black uppercase tracking-[0.15em] text-amber-500/70">
+                    Live Commentary
+                  </span>
+                </div>
+                <div className="p-2.5 overflow-hidden">
+                  {latestCommentary ? (
+                    <p className="text-[10px] leading-[1.5] text-zinc-400 line-clamp-6">
                       {latestCommentary}
                     </p>
-                  </div>
+                  ) : (
+                    <p className="text-[10px] text-zinc-700 italic">Awaiting first exchange...</p>
+                  )}
                 </div>
               </div>
-            )}
-
-            {/* Oxford Union Stage — 3-panel: Debater A | Judge | Debater B */}
-            <div
-              className="relative rounded-xl overflow-hidden border border-[#27272a]"
-              style={{
-                background: 'linear-gradient(180deg, #0c0c0c 0%, #080808 100%)',
-                minHeight: '320px',
-              }}
-            >
-              {/* Stage wood grain texture overlay */}
-              <div
-                className="absolute inset-0 pointer-events-none opacity-[0.03]"
-                style={{
-                  backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 2px, rgba(139,90,43,0.3) 2px, rgba(139,90,43,0.3) 3px)',
-                }}
-              />
-
-              {/* View Mode Toggle (top center) */}
-              <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10">
-                <div className="flex items-center gap-0.5 p-0.5 rounded-md bg-black/60 backdrop-blur-sm border border-[#27272a]/50">
-                  <button
-                    onClick={() => setViewMode('video')}
-                    className={`flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-bold transition-all ${
-                      viewMode === 'video' ? 'bg-[#27272a] text-white' : 'text-zinc-600 hover:text-zinc-400'
-                    }`}
-                  >
-                    <Monitor className="w-3 h-3" />
-                    Chamber
-                  </button>
-                  <button
-                    onClick={() => setViewMode('graph')}
-                    className={`flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-bold transition-all ${
-                      viewMode === 'graph' ? 'bg-[#27272a] text-white' : 'text-zinc-600 hover:text-zinc-400'
-                    }`}
-                  >
-                    <BarChart3 className="w-3 h-3" />
-                    Battlefield
-                  </button>
-                </div>
-              </div>
-
-              {viewMode === 'video' ? (
-                /* ── CHAMBER VIEW: Oxford Union layout ─── */
-                <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-0 p-4 pt-12 min-h-[320px]">
-                  {/* Debater A — Left podium */}
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="w-full max-w-[240px]">
-                      <AvatarVideo
-                        sessionId={avSessions.debaterA?.sessionId}
-                        iceServers={avSessions.debaterA?.iceServers}
-                        offer={avSessions.debaterA?.offer}
-                        side="a"
-                        fallbackLabel={bookA.title}
-                        coverUrl={bookA.cover_url}
-                        isActive={isActive}
-                      />
-                    </div>
-                    {/* Podium nameplate */}
-                    <div
-                      className="px-3 py-1.5 rounded text-center"
-                      style={{
-                        background: 'linear-gradient(135deg, #1a0505, #2d0a0a)',
-                        border: '1px solid #ef444440',
-                      }}
-                    >
-                      <p className="text-[10px] font-black uppercase tracking-[0.2em] text-red-400">{bookA.title}</p>
-                      <p className="text-[8px] text-zinc-500">{bookA.author_name}</p>
-                    </div>
-                  </div>
-
-                  {/* Judge — Center (elevated, smaller) */}
-                  <div className="flex flex-col items-center gap-2 px-4 -mb-2">
-                    <div
-                      className="w-[120px] xl:w-[150px] relative"
-                    >
-                      {/* Judge "bench" elevated platform */}
-                      <div
-                        className="relative rounded-lg overflow-hidden"
-                        style={{
-                          border: '2px solid #d4a01760',
-                          boxShadow: '0 0 20px rgba(212,160,23,0.15)',
-                        }}
-                      >
-                        {/* Judge avatar placeholder — Gemini */}
-                        <div
-                          className="aspect-[3/4] flex flex-col items-center justify-center"
-                          style={{
-                            background: 'linear-gradient(180deg, #0f0d05 0%, #1a1505 100%)',
-                          }}
-                        >
-                          <div className="text-3xl mb-1">⚖️</div>
-                          <span className="text-[9px] font-black uppercase tracking-[0.2em] text-amber-400/60">Judge</span>
-                          <span className="text-[8px] text-amber-400/40 mt-0.5">Gemini</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div
-                      className="px-3 py-1 rounded text-center"
-                      style={{
-                        background: 'linear-gradient(135deg, #1a1505, #0d0a02)',
-                        border: '1px solid #d4a01730',
-                      }}
-                    >
-                      <p className="text-[9px] font-bold uppercase tracking-[0.15em] text-amber-400/70">The Bench</p>
-                    </div>
-                  </div>
-
-                  {/* Debater B — Right podium */}
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="w-full max-w-[240px]">
-                      <AvatarVideo
-                        sessionId={avSessions.debaterB?.sessionId}
-                        iceServers={avSessions.debaterB?.iceServers}
-                        offer={avSessions.debaterB?.offer}
-                        side="b"
-                        fallbackLabel={bookB.title}
-                        coverUrl={bookB.cover_url}
-                        isActive={isActive}
-                      />
-                    </div>
-                    {/* Podium nameplate */}
-                    <div
-                      className="px-3 py-1.5 rounded text-center"
-                      style={{
-                        background: 'linear-gradient(135deg, #050d1a, #0a1a2d)',
-                        border: '1px solid #3b82f640',
-                      }}
-                    >
-                      <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-400">{bookB.title}</p>
-                      <p className="text-[8px] text-zinc-500">{bookB.author_name}</p>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                /* ── BATTLEFIELD VIEW: SVG visualization ─── */
-                <div className="p-4 pt-12 min-h-[320px] flex items-center justify-center">
-                  <BattlefieldGraph
-                    axiomsA={axiomsA}
-                    axiomsB={axiomsB}
-                    latestAttack={latestAttack}
-                    collapsible
-                  />
-                </div>
-              )}
             </div>
 
-            {/* Controls bar — below the stage */}
+            {/* ── [Row2, Col1] Axiom Panel A ───────────────────────── */}
+            <div className="row-span-1 overflow-y-auto max-h-[480px]">
+              <AxiomPanel
+                side="a"
+                bookTitle={bookA.title}
+                authorName={bookA.author_name}
+                axioms={axiomsA}
+                lastDamagedId={lastDamagedId}
+                model={modelA}
+              />
+            </div>
+
+            {/* ── [Row2, Col2] Oxford Union Debate Stage ────────────── */}
+            <div className="row-span-1">
+              <div
+                className="relative rounded-xl overflow-hidden h-full"
+                style={{
+                  border: '1px solid rgba(139,90,43,0.2)',
+                  boxShadow: '0 8px 40px rgba(0,0,0,0.5), inset 0 0 60px rgba(139,90,43,0.03)',
+                  background: 'linear-gradient(180deg, rgba(26,18,10,0.6) 0%, rgba(13,9,4,0.8) 50%, rgba(8,6,3,0.9) 100%)',
+                  minHeight: '360px',
+                }}
+              >
+                {/* Stage floor wood texture */}
+                <div
+                  className="absolute inset-0 pointer-events-none opacity-[0.05]"
+                  style={{
+                    backgroundImage: `
+                      repeating-linear-gradient(90deg, transparent, transparent 60px, rgba(139,90,43,0.3) 60px, rgba(139,90,43,0.3) 61px),
+                      repeating-linear-gradient(0deg, transparent, transparent 120px, rgba(139,90,43,0.15) 120px, rgba(139,90,43,0.15) 121px)
+                    `,
+                  }}
+                />
+
+                {/* Overhead stage lighting */}
+                <div
+                  className="absolute top-0 left-1/2 -translate-x-1/2 w-3/4 h-32 pointer-events-none"
+                  style={{
+                    background: 'radial-gradient(ellipse at center top, rgba(212,160,23,0.06) 0%, transparent 80%)',
+                    animation: 'candleGlow 6s ease-in-out infinite',
+                  }}
+                />
+
+                {/* View Mode Toggle */}
+                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10">
+                  <div className="flex items-center gap-0.5 p-0.5 rounded-md bg-black/60 backdrop-blur-sm border border-[#27272a]/50">
+                    <button
+                      onClick={() => setViewMode('video')}
+                      className={`flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-bold transition-all ${
+                        viewMode === 'video' ? 'bg-amber-900/40 text-amber-300' : 'text-zinc-600 hover:text-zinc-400'
+                      }`}
+                    >
+                      <Monitor className="w-3 h-3" />
+                      Chamber
+                    </button>
+                    <button
+                      onClick={() => setViewMode('graph')}
+                      className={`flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-bold transition-all ${
+                        viewMode === 'graph' ? 'bg-amber-900/40 text-amber-300' : 'text-zinc-600 hover:text-zinc-400'
+                      }`}
+                    >
+                      <BarChart3 className="w-3 h-3" />
+                      Battlefield
+                    </button>
+                  </div>
+                </div>
+
+                {viewMode === 'video' ? (
+                  /* ── CHAMBER VIEW: Debater A | Judge | Debater B ─── */
+                  <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3 p-4 pt-12 h-full min-h-[360px]">
+                    {/* Debater A — Left podium */}
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="w-full max-w-[260px]">
+                        <AvatarVideo
+                          sessionId={avSessions.debaterA?.sessionId || null}
+                          iceServers={avSessions.debaterA?.iceServers}
+                          offer={avSessions.debaterA?.offer}
+                          side="a"
+                          fallbackLabel={bookA.title}
+                          coverUrl={bookA.cover_url}
+                          isActive={isActive}
+                        />
+                      </div>
+                      <div
+                        className="px-4 py-1.5 rounded text-center"
+                        style={{
+                          background: 'linear-gradient(135deg, rgba(26,5,5,0.8), rgba(45,10,10,0.6))',
+                          border: '1px solid rgba(239,68,68,0.25)',
+                          boxShadow: '0 2px 8px rgba(239,68,68,0.1)',
+                        }}
+                      >
+                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-red-400">{bookA.title}</p>
+                        <p className="text-[8px] text-zinc-500">{bookA.author_name}</p>
+                      </div>
+                    </div>
+
+                    {/* Judge — Center (elevated) */}
+                    <div className="flex flex-col items-center gap-2 px-2">
+                      <div className="w-[110px] xl:w-[140px]">
+                        <div
+                          className="relative rounded-lg overflow-hidden"
+                          style={{
+                            border: '2px solid rgba(212,160,23,0.35)',
+                            boxShadow: '0 0 24px rgba(212,160,23,0.12)',
+                          }}
+                        >
+                          <div
+                            className="aspect-[3/4] flex flex-col items-center justify-center"
+                            style={{
+                              background: 'linear-gradient(180deg, rgba(26,21,5,0.9) 0%, rgba(15,13,5,0.95) 100%)',
+                            }}
+                          >
+                            <div className="text-3xl mb-1">&#x2696;&#xFE0F;</div>
+                            <span className="text-[9px] font-black uppercase tracking-[0.2em] text-amber-400/60">Judge</span>
+                            <span className="text-[8px] text-amber-400/40 mt-0.5">Gemini</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div
+                        className="px-3 py-1 rounded text-center"
+                        style={{
+                          background: 'linear-gradient(135deg, rgba(26,21,5,0.6), rgba(13,10,2,0.4))',
+                          border: '1px solid rgba(212,160,23,0.15)',
+                        }}
+                      >
+                        <p className="text-[9px] font-bold uppercase tracking-[0.15em] text-amber-400/60">The Bench</p>
+                      </div>
+                    </div>
+
+                    {/* Debater B — Right podium */}
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="w-full max-w-[260px]">
+                        <AvatarVideo
+                          sessionId={avSessions.debaterB?.sessionId || null}
+                          iceServers={avSessions.debaterB?.iceServers}
+                          offer={avSessions.debaterB?.offer}
+                          side="b"
+                          fallbackLabel={bookB.title}
+                          coverUrl={bookB.cover_url}
+                          isActive={isActive}
+                        />
+                      </div>
+                      <div
+                        className="px-4 py-1.5 rounded text-center"
+                        style={{
+                          background: 'linear-gradient(135deg, rgba(5,13,26,0.8), rgba(10,26,45,0.6))',
+                          border: '1px solid rgba(59,130,246,0.25)',
+                          boxShadow: '0 2px 8px rgba(59,130,246,0.1)',
+                        }}
+                      >
+                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-400">{bookB.title}</p>
+                        <p className="text-[8px] text-zinc-500">{bookB.author_name}</p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* ── BATTLEFIELD VIEW: SVG visualization ─── */
+                  <div className="p-4 pt-12 min-h-[360px] flex items-center justify-center">
+                    <BattlefieldGraph
+                      axiomsA={axiomsA}
+                      axiomsB={axiomsB}
+                      latestAttack={latestAttack}
+                      collapsible
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* ── [Row2, Col3] Axiom Panel B ───────────────────────── */}
+            <div className="row-span-1 overflow-y-auto max-h-[480px]">
+              <AxiomPanel
+                side="b"
+                bookTitle={bookB.title}
+                authorName={bookB.author_name}
+                axioms={axiomsB}
+                lastDamagedId={lastDamagedId}
+                model={modelB}
+              />
+            </div>
+          </div>
+
+          {/* ═══════════════════════════════════════════════════════════
+               ROW 3: Controls + Shoutcaster Ticker
+             ═══════════════════════════════════════════════════════════ */}
+          <div className="mt-3 space-y-2">
+            {/* Controls bar */}
             {isOwner && isActive && (
-              <div className="flex items-center justify-center gap-2 mt-3">
+              <div className="flex items-center justify-center gap-2">
                 <Button
                   onClick={executeNextRound}
                   disabled={executing || session.current_round >= session.max_rounds}
                   size="sm"
-                  className="bg-violet-600 hover:bg-violet-700 text-white"
+                  className="bg-amber-700 hover:bg-amber-600 text-white border border-amber-600/30"
                 >
                   {executing ? (
                     <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />Executing...</>
@@ -619,7 +743,7 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
                   onClick={() => setAutoPlay(!autoPlay)}
                   variant="outline"
                   size="sm"
-                  className={autoPlay ? 'border-green-500 text-green-400' : ''}
+                  className={autoPlay ? 'border-green-500 text-green-400' : 'border-zinc-700 text-zinc-400'}
                 >
                   {autoPlay ? <><Pause className="mr-1.5 h-3.5 w-3.5" />Auto</> : 'Auto-Play'}
                 </Button>
@@ -634,80 +758,70 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
                 </Button>
               </div>
             )}
-          </div>
 
-          {/* Shoutcaster Ticker — below the stage */}
-          <div className="mt-3">
+            {/* Shoutcaster Ticker */}
             <ShoutcasterTicker
               commentaries={commentaries}
               modelAttribution={{ referee: 'Gemini', commentator: 'Grok' }}
             />
           </div>
 
-          {/* ── Axiom Panels + Betting: Below the stage ──────────── */}
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_280px_1fr] mt-4">
-            {/* Side A Axioms */}
-            <AxiomPanel
-              side="a"
-              bookTitle={bookA.title}
-              authorName={bookA.author_name}
-              axioms={axiomsA}
-              lastDamagedId={lastDamagedId}
-              model={modelA}
-            />
+          {/* ═══════════════════════════════════════════════════════════
+               ROW 4: Battlefield/Graph + Betting Panel
+             ═══════════════════════════════════════════════════════════ */}
+          <div className="mt-3 grid grid-cols-1 xl:grid-cols-[1fr_300px] gap-3">
+            {/* Battlefield Graph or Argument Log */}
+            <div>
+              {viewMode === 'video' && (
+                <div className="mb-3">
+                  <BattlefieldGraph
+                    axiomsA={axiomsA}
+                    axiomsB={axiomsB}
+                    latestAttack={latestAttack}
+                    collapsible
+                  />
+                </div>
+              )}
+              <ArgumentLog
+                rounds={rounds}
+                args={args}
+                bookATitle={bookA.title}
+                bookBTitle={bookB.title}
+              />
+            </div>
 
-            {/* Betting Panel (center below) */}
-            <BettingPanel
-              sessionId={session.id}
-              pool={state.pool || null}
-              bookATitle={bookA.title}
-              bookBTitle={bookB.title}
-              walletBalance={walletBalance}
-              userBet={userBet}
-              onPlaceBet={handlePlaceBet}
-            />
-
-            {/* Side B Axioms */}
-            <AxiomPanel
-              side="b"
-              bookTitle={bookB.title}
-              authorName={bookB.author_name}
-              axioms={axiomsB}
-              lastDamagedId={lastDamagedId}
-              model={modelB}
-            />
+            {/* Betting Panel */}
+            <div className="space-y-3">
+              <BettingPanel
+                sessionId={session.id}
+                pool={state.pool || null}
+                bookATitle={bookA.title}
+                bookBTitle={bookB.title}
+                walletBalance={walletBalance}
+                userBet={userBet}
+                onPlaceBet={handlePlaceBet}
+              />
+              <RoundIndicator
+                currentRound={session.current_round}
+                maxRounds={session.max_rounds}
+                status={session.status}
+              />
+            </div>
           </div>
 
-          {/* Sponsor Chyron — always visible, shows model attribution even without sponsors */}
-          <div className="mt-4">
+          {/* ═══════════════════════════════════════════════════════════
+               ROW 5: Sponsor Chyron
+             ═══════════════════════════════════════════════════════════ */}
+          <div className="mt-3">
             <SponsorChyron
               sponsors={state.sponsors || []}
               modelAttribution={{ referee: 'Gemini', commentator: 'Grok' }}
             />
           </div>
 
-          {/* Round Indicator */}
-          <div className="mt-4 flex items-center justify-center">
-            <RoundIndicator
-              currentRound={session.current_round}
-              maxRounds={session.max_rounds}
-              status={session.status}
-            />
-          </div>
-
-          {/* Argument Log */}
-          <div className="mt-4">
-            <ArgumentLog
-              rounds={rounds}
-              args={args}
-              bookATitle={bookA.title}
-              bookBTitle={bookB.title}
-            />
-          </div>
-
           {/* Synthesis (post-fight) */}
           {isCompleted && (
-            <div className="mt-6">
+            <div className="mt-4">
               <SynthesisPanel
                 sessionId={session.id}
                 synthesis={session.synthesis as SynthesisResult | null}
