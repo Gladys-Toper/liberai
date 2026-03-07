@@ -3,6 +3,24 @@
 ## Project Overview
 LiberAi is an AI-powered book publishing and debate platform built with Next.js 15, Supabase, and Vercel AI SDK. The "Ontological Pugilism Arena" lets books/authors debate each other with AI-generated arguments, live HP systems, betting pools, and cinematic video replays.
 
+## Commands
+
+```bash
+npm run dev          # Next.js dev server (port 3000)
+npm run build        # Production build
+npm run lint         # ESLint
+npm start            # Production server
+npm run mcp          # Start MCP server (agent protocol)
+npx tsc --noEmit     # Type check (run before committing)
+bash scripts/check-models.sh  # Detect deprecated AI model references
+```
+
+**Database:**
+```bash
+npx supabase migration new <name>  # Create migration file
+npx supabase db push               # Apply migrations to remote
+```
+
 ## Critical Rules
 
 ### AI Model Assignments — SINGLE SOURCE OF TRUTH
@@ -44,6 +62,47 @@ The cinematic video pipeline uses a **self-chaining serverless pattern** to avoi
 - Auth: `VIDEO_PIPELINE_SECRET` env var
 - State: `video_state JSONB` column on `debate_sessions`
 
+## Architecture
+
+### Directory Structure
+```
+src/
+├── app/
+│   ├── (admin)/         # Admin dashboard routes
+│   ├── (auth)/          # Login/signup routes
+│   ├── (marketing)/     # Landing pages
+│   ├── (platform)/      # Reader-facing platform
+│   └── api/             # API routes (see below)
+├── components/
+│   └── arena/           # Debate UI (DebateArenaClient, CinematicPlayer, overlays)
+└── lib/
+    ├── arena/           # Debate engine, models, video, screenplay
+    ├── agents/          # A2A agent network (trust, metering, events)
+    ├── ai/              # RAG pipeline (book chunk search, embeddings)
+    ├── auth/            # Supabase auth helpers, API key validation
+    ├── db/              # Database queries
+    ├── payments/        # Stripe + pricing + token cost calculations
+    ├── social/          # Social features
+    └── upload/          # File upload handling
+```
+
+### API Routes
+```
+api/
+├── arena/[id]/video/   # Self-chaining cinematic video pipeline
+├── a2a/                # Agent-to-Agent JSON-RPC (tasks, swarms, discovery)
+├── chat/               # Reader book Q&A (multi-model)
+├── author-chat/        # Author dashboard AI assistant
+├── admin-chat/         # Admin dashboard AI assistant
+├── v1/                 # Versioned external API (author/admin chat)
+├── auth/               # Auth callbacks
+├── wallet/             # Crypto wallet (x402 payments)
+└── mcp/                # MCP server endpoint
+```
+
+### Path Alias
+`@/*` maps to `./src/*` — use `@/lib/...`, `@/components/...`, etc.
+
 ## Tech Stack
 - **Framework**: Next.js 15 (App Router)
 - **Database**: Supabase (PostgreSQL + Auth + Storage + Realtime)
@@ -51,7 +110,7 @@ The cinematic video pipeline uses a **self-chaining serverless pattern** to avoi
 - **Video**: LTX Video 2.3 API (`https://api.ltx.video`)
 - **Hosting**: Vercel (serverless)
 - **Styling**: Tailwind CSS + Framer Motion
-- **Payments**: Stripe
+- **Payments**: Stripe + x402 crypto micropayments
 
 ## Key Files
 - `src/lib/arena/model-provider.ts` — AI model assignments (SINGLE SOURCE OF TRUTH)
@@ -64,10 +123,14 @@ The cinematic video pipeline uses a **self-chaining serverless pattern** to avoi
 - `src/components/arena/CinematicPlayer.tsx` — Video player with timeline overlays
 - `src/lib/payments/pricing.ts` — Per-token pricing (keep in sync with model-provider.ts)
 
-## Validation
-- Run `bash scripts/check-models.sh` after any model-related changes
-- Run `npx tsc --noEmit` before committing
-- Run `npm run build` to verify production build
+## Gotchas
+
+- **Vercel serverless timeout**: 300s max on Pro plan. Long tasks (video gen) must use self-chaining pattern with `after()` + self-POST
+- **`maxDuration`**: Set `export const maxDuration = 300` in route files that need extended execution
+- **Git paths with brackets**: Quote paths like `"src/app/api/arena/[id]/video/route.ts"` in git commands
+- **Supabase service client**: Use `SUPABASE_SERVICE_ROLE_KEY` for server-side DB access, never expose to client
+- **Model drift**: AI sessions may hallucinate older model versions. Always check `model-provider.ts` and run `scripts/check-models.sh`
+- **XAI fallback**: If `XAI_API_KEY` is not set, Grok roles fall back to Gemini 3.1 Flash automatically
 
 ## Environment Variables
 - `LTX_API_KEY` — LTX Video API key
@@ -76,7 +139,12 @@ The cinematic video pipeline uses a **self-chaining serverless pattern** to avoi
 - `OPENAI_API_KEY` — OpenAI API key
 - `GOOGLE_GENERATIVE_AI_API_KEY` — Google Gemini API key
 - `ANTHROPIC_API_KEY` — Anthropic Claude API key
+- `NEXT_PUBLIC_SUPABASE_URL` — Supabase project URL
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY` — Supabase anon key (client-safe)
+- `SUPABASE_SERVICE_ROLE_KEY` — Supabase service key (server-only)
+- `STRIPE_SECRET_KEY` — Stripe payments
 
 ## Supabase
 - Project ID: `zsevmbfgdtoojzgxyxqf`
 - Storage bucket: `debate-video` (public read)
+- Migrations: `supabase/migrations/` (numbered 001–010+)
