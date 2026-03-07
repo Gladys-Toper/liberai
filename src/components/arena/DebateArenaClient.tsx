@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Play, Pause, Loader2, Flag, Trophy, BarChart3, MessageSquare } from 'lucide-react'
+import { Play, Pause, Loader2, Flag, Trophy, BarChart3, MessageSquare, Film } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { AxiomPanel } from './AxiomPanel'
 import { BattlefieldGraph } from './BattlefieldGraph'
@@ -11,9 +11,8 @@ import { ArgumentLog } from './ArgumentLog'
 import { SynthesisPanel, type SynthesisResult } from './SynthesisPanel'
 import { BettingPanel } from './BettingPanel'
 import { SponsorChyron } from './SponsorChyron'
-import { AvatarVideo } from './AvatarVideo'
-import { CommentatorBooth } from './CommentatorBooth'
-import { useBrowserTTS } from '@/hooks/useBrowserTTS'
+import { CinematicPlayer } from './CinematicPlayer'
+import type { TimelineEvent } from '@/lib/arena/timeline-sync'
 
 // ── Types ──────────────────────────────────────────────────────────────
 interface PoolState {
@@ -37,14 +36,6 @@ interface SponsorAssignment {
     logo_url?: string | null
     tier: string
   } | null
-}
-
-interface AVSession {
-  streamId?: string
-  sessionId: string
-  iceServers: RTCIceServer[]
-  offer: RTCSessionDescriptionInit
-  didVoiceId?: string
 }
 
 interface DebateState {
@@ -156,25 +147,12 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
   const [walletBalance, setWalletBalance] = useState(1000)
   const [userBet, setUserBet] = useState<{ side: 'a' | 'b'; amount: number; payout: number | null } | null>(null)
 
-  // AV sessions
-  const [avSessions, setAvSessions] = useState<{
-    debaterA?: AVSession
-    debaterB?: AVSession
-    commentator?: AVSession
-  }>({})
-  const [avEnabled, setAvEnabled] = useState(false)
-  const [avBackend, setAvBackend] = useState<'did' | 'simli' | 'none'>('none')
-  const [avProfiles, setAvProfiles] = useState<{
-    authorA?: { portraitUrl?: string | null; nationality?: string | null; era?: string | null; didVoiceId?: string | null; accentHint?: string | null }
-    authorB?: { portraitUrl?: string | null; nationality?: string | null; era?: string | null; didVoiceId?: string | null; accentHint?: string | null }
-  }>({})
-  const avCleanupRef = useRef<string[]>([])
-  const avApiBase = `/api/arena/${initialState.session.id}/av`
-
-  // Browser TTS — speaks debate text with character-appropriate voices
-  // Dynamic profiles from AV author resolution (accent-aware)
-  const tts = useBrowserTTS()
-  const lastSpokenRound = useRef(0)
+  // ── Cinematic video replay state ──────────────────────────────────
+  const [videoUrl, setVideoUrl] = useState<string | null>(null)
+  const [videoTimeline, setVideoTimeline] = useState<TimelineEvent[] | null>(null)
+  const [videoStatus, setVideoStatus] = useState<string | null>(null)
+  const [videoProgress, setVideoProgress] = useState(0)
+  const [showCinematic, setShowCinematic] = useState(false)
 
   const { session, bookA, bookB, axioms, rounds, arguments: args } = state
   const modelA = state.modelA || session.model_a || 'openai'
@@ -196,68 +174,6 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
   const commentaries = rounds
     .filter((r) => r.commentary)
     .map((r) => ({ round: r.round_number, text: r.commentary! }))
-
-  // ── Initialize AV sessions ──────────────────────────────────────────
-  useEffect(() => {
-    async function initAV() {
-      try {
-        const res = await fetch(`/api/arena/${session.id}/av`, { method: 'POST' })
-        if (!res.ok) return
-        const data = await res.json()
-
-        // Store author profiles (portraits, nationality, voice IDs) regardless of AV backend
-        if (data.profiles) {
-          setAvProfiles({
-            authorA: data.profiles.authorA,
-            authorB: data.profiles.authorB,
-          })
-        }
-
-        if (data.avEnabled && data.sessions) {
-          const backend = data.backend as 'did' | 'simli'
-          setAvBackend(backend)
-          setAvSessions({
-            debaterA: data.sessions.debaterA,
-            debaterB: data.sessions.debaterB,
-          })
-          setAvEnabled(true)
-
-          // Track IDs for cleanup — D-ID uses streamIds, Simli uses sessionIds
-          if (backend === 'did') {
-            avCleanupRef.current = [
-              data.sessions.debaterA?.streamId,
-              data.sessions.debaterB?.streamId,
-            ].filter(Boolean)
-          } else {
-            avCleanupRef.current = [
-              data.sessions.debaterA?.sessionId,
-              data.sessions.debaterB?.sessionId,
-            ].filter(Boolean)
-          }
-        }
-      } catch {
-        // AV not available — stay in video mode with animated portrait fallbacks
-      }
-    }
-
-    if (session.status === 'active' || session.status === 'extracting') {
-      initAV()
-    }
-
-    return () => {
-      if (avCleanupRef.current.length > 0) {
-        const cleanupBody = avBackend === 'did'
-          ? { streamIds: avCleanupRef.current }
-          : { sessionIds: avCleanupRef.current }
-        fetch(`/api/arena/${session.id}/av`, {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(cleanupBody),
-        }).catch(() => {})
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id])
 
   // ── Fetch wallet balance ─────────────────────────────────────────────
   useEffect(() => {
@@ -287,44 +203,75 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
     fetchBet()
   }, [session.id])
 
-  // ── Auto-narrate new rounds via browser TTS ─────────────────────
+  // ── Check for existing cinematic video on load ──────────────────
   useEffect(() => {
-    if (avEnabled) return // Don't use browser TTS when Simli AV is active
-
-    const completedRounds = rounds.filter(r => r.status === 'completed')
-    if (completedRounds.length === 0) return
-
-    const latestRound = completedRounds[completedRounds.length - 1]
-    if (latestRound.round_number <= lastSpokenRound.current) return
-
-    // Find the attack and defense arguments for this round
-    // Each completed round produces 2 args (attack + defense), so the latest round's
-    // args are the last 2 in the array for that round number
-    const prevArgsCount = (completedRounds.length - 1) * 2
-    const roundArgs = args.slice(prevArgsCount, prevArgsCount + 2)
-
-    // Get attack (attacker side) and defense texts
-    const attackArg = roundArgs.find(
-      a => a.move_type === 'attack' && a.side === latestRound.attacker_side
-    )
-    const defenseArg = roundArgs.find(
-      a => a.move_type === 'defense' && a.side !== latestRound.attacker_side
-    )
-
-    if (attackArg && defenseArg) {
-      tts.speakRound(
-        attackArg.claim,
-        latestRound.attacker_side as 'a' | 'b',
-        defenseArg.claim,
-        latestRound.commentary,
-      )
-    } else if (latestRound.commentary) {
-      // At least speak commentary
-      tts.speak(latestRound.commentary, 'commentator')
+    async function checkVideo() {
+      try {
+        const res = await fetch(`/api/arena/${session.id}/video`)
+        if (!res.ok) return
+        const data = await res.json()
+        if (data.status === 'complete' && data.videoUrl) {
+          setVideoUrl(data.videoUrl)
+          setVideoTimeline(data.timeline || [])
+          setVideoStatus('complete')
+        } else if (data.status === 'generating') {
+          setVideoStatus('generating')
+          setVideoProgress(data.progress || 0)
+        }
+      } catch { /* video check optional */ }
     }
+    if (session.status === 'completed') {
+      checkVideo()
+    }
+  }, [session.id, session.status])
 
-    lastSpokenRound.current = latestRound.round_number
-  }, [rounds, args, avEnabled, tts])
+  // ── Poll video generation progress ────────────────────────────────
+  useEffect(() => {
+    if (videoStatus !== 'generating') return
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/arena/${session.id}/video`)
+        if (!res.ok) return
+        const data = await res.json()
+        if (data.status === 'complete' && data.videoUrl) {
+          setVideoUrl(data.videoUrl)
+          setVideoTimeline(data.timeline || [])
+          setVideoStatus('complete')
+          setVideoProgress(data.total || 9)
+        } else if (data.status === 'generating') {
+          setVideoProgress(data.progress || 0)
+        } else if (data.status === 'error') {
+          setVideoStatus('error')
+        }
+      } catch { /* polling retry */ }
+    }, 5000)
+
+    return () => clearInterval(interval)
+  }, [session.id, videoStatus])
+
+  // ── Trigger cinematic video generation ────────────────────────────
+  const generateCinematicVideo = useCallback(async () => {
+    if (videoStatus === 'generating') return
+    setVideoStatus('generating')
+    setVideoProgress(0)
+
+    try {
+      const res = await fetch(`/api/arena/${session.id}/video`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        console.error('Video generation failed:', err.error)
+        setVideoStatus('error')
+        return
+      }
+      // POST triggers background pipeline — polling picks up progress
+    } catch (err) {
+      console.error('Video generation request failed:', err)
+      setVideoStatus('error')
+    }
+  }, [session.id, videoStatus])
 
   // ── Screen shake detection ───────────────────────────────────────────
   useEffect(() => {
@@ -360,29 +307,10 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
     setExecuting(true)
 
     try {
-      const roundBody: Record<string, unknown> = {}
-      if (avEnabled && avSessions.debaterA?.sessionId) {
-        roundBody.avSessions = {
-          debaterA: avSessions.debaterA ? {
-            streamId: avSessions.debaterA.streamId || '',
-            sessionId: avSessions.debaterA.sessionId,
-            voiceId: avSessions.debaterA.didVoiceId,
-          } : null,
-          debaterB: avSessions.debaterB ? {
-            streamId: avSessions.debaterB.streamId || '',
-            sessionId: avSessions.debaterB.sessionId,
-            voiceId: avSessions.debaterB.didVoiceId,
-          } : null,
-          commentator: avSessions.commentator ? {
-            streamId: avSessions.commentator.streamId || '',
-            sessionId: avSessions.commentator.sessionId,
-          } : null,
-        }
-      }
       const res = await fetch(`/api/arena/${session.id}/rounds`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(roundBody),
+        body: JSON.stringify({}),
       })
       if (!res.ok) throw new Error((await res.json()).error)
 
@@ -405,7 +333,7 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
     } finally {
       setExecuting(false)
     }
-  }, [executing, session.id, session.status, avEnabled, avSessions])
+  }, [executing, session.id, session.status])
 
   // ── Auto-play ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -472,6 +400,51 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
     <>
       <style dangerouslySetInnerHTML={{ __html: ARENA_STYLES }} />
 
+      {/* ═══════════════════════════════════════════════════════════════════════
+          CINEMATIC REPLAY MODE — Full-screen video player with timeline sync
+          ═══════════════════════════════════════════════════════════════════════ */}
+      {showCinematic && videoUrl && videoTimeline && (
+        <div className="relative w-full" style={{ height: '100vh' }}>
+          <CinematicPlayer
+            videoUrl={videoUrl}
+            timeline={videoTimeline}
+            axiomsA={axiomsA.map(a => ({
+              ...a,
+              session_id: session.id,
+              description: null,
+              source_chunk_ids: [],
+              is_destroyed: a.is_destroyed,
+              destroyed_at_round: null,
+            }))}
+            axiomsB={axiomsB.map(a => ({
+              ...a,
+              session_id: session.id,
+              description: null,
+              source_chunk_ids: [],
+              is_destroyed: a.is_destroyed,
+              destroyed_at_round: null,
+            }))}
+            bookATitle={bookA.title}
+            bookBTitle={bookB.title}
+            pool={state.pool || null}
+            sponsors={state.sponsors || []}
+            maxRounds={session.max_rounds}
+            sessionId={session.id}
+          />
+          {/* Back to arena button */}
+          <button
+            onClick={() => setShowCinematic(false)}
+            className="absolute top-4 left-4 z-50 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider text-amber-400 border border-amber-600/30 bg-black/70 backdrop-blur-sm hover:bg-black/90 transition-colors"
+          >
+            ← Back to Arena
+          </button>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════════════
+          LIVE DEBATE / POST-DEBATE ARENA VIEW
+          ═══════════════════════════════════════════════════════════════════════ */}
+      {(!showCinematic || !videoUrl || !videoTimeline) && (
       <div
         className="relative w-full overflow-hidden"
         style={{
@@ -486,21 +459,22 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
         <div className="absolute inset-0 grid grid-cols-2">
           {/* ── LEFT: Debater A ─── */}
           <div className="relative overflow-hidden" style={{ borderRight: '1px solid rgba(180,140,50,0.15)' }}>
-            <AvatarVideo
-              streamId={avSessions.debaterA?.streamId}
-              sessionId={avSessions.debaterA?.sessionId || null}
-              iceServers={avSessions.debaterA?.iceServers}
-              offer={avSessions.debaterA?.offer}
-              side="a"
-              fallbackLabel={bookA.author_name || bookA.title}
-              portraitUrl={avProfiles.authorA?.portraitUrl || bookA.portrait_url}
-              coverUrl={bookA.cover_url}
-              nationality={avProfiles.authorA?.nationality || bookA.nationality}
-              isActive={isActive}
-              isTTSSpeaking={tts.speaking && tts.activeRole === 'debater_a'}
-              avApiBase={avApiBase}
-              broadcast
-            />
+            {/* Portrait / Cover fallback */}
+            <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-red-950/30 to-black">
+              {bookA.portrait_url || bookA.cover_url ? (
+                <img
+                  src={bookA.portrait_url || bookA.cover_url || ''}
+                  alt={bookA.author_name}
+                  className="w-full h-full object-cover opacity-60"
+                />
+              ) : (
+                <div className="text-6xl font-black text-red-500/20 uppercase tracking-wider">
+                  {bookA.author_name.charAt(0)}
+                </div>
+              )}
+              {/* Vignette overlay */}
+              <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/40" />
+            </div>
 
             {/* Name plate — lower left */}
             <div className="absolute bottom-24 left-0 z-30">
@@ -528,21 +502,22 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
 
           {/* ── RIGHT: Debater B ─── */}
           <div className="relative overflow-hidden" style={{ borderLeft: '1px solid rgba(180,140,50,0.15)' }}>
-            <AvatarVideo
-              streamId={avSessions.debaterB?.streamId}
-              sessionId={avSessions.debaterB?.sessionId || null}
-              iceServers={avSessions.debaterB?.iceServers}
-              offer={avSessions.debaterB?.offer}
-              side="b"
-              fallbackLabel={bookB.author_name || bookB.title}
-              portraitUrl={avProfiles.authorB?.portraitUrl || bookB.portrait_url}
-              coverUrl={bookB.cover_url}
-              nationality={avProfiles.authorB?.nationality || bookB.nationality}
-              isActive={isActive}
-              isTTSSpeaking={tts.speaking && tts.activeRole === 'debater_b'}
-              avApiBase={avApiBase}
-              broadcast
-            />
+            {/* Portrait / Cover fallback */}
+            <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-blue-950/30 to-black">
+              {bookB.portrait_url || bookB.cover_url ? (
+                <img
+                  src={bookB.portrait_url || bookB.cover_url || ''}
+                  alt={bookB.author_name}
+                  className="w-full h-full object-cover opacity-60"
+                />
+              ) : (
+                <div className="text-6xl font-black text-blue-500/20 uppercase tracking-wider">
+                  {bookB.author_name.charAt(0)}
+                </div>
+              )}
+              {/* Vignette overlay */}
+              <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/40" />
+            </div>
 
             {/* Name plate — lower right */}
             <div className="absolute bottom-24 right-0 z-30 text-right">
@@ -712,27 +687,53 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
                 <p className="text-4xl font-black text-amber-400 uppercase tracking-wider">{winnerBook.title}</p>
                 <p className="text-xl text-amber-300/60 uppercase tracking-[0.3em] mt-2">Wins</p>
                 <p className="text-sm text-zinc-500 mt-3">Victory by {session.win_condition}</p>
+
+                {/* ── Cinematic Replay Buttons ── */}
+                <div className="mt-6 flex items-center justify-center gap-3">
+                  {videoStatus === 'complete' && videoUrl ? (
+                    <button
+                      onClick={() => setShowCinematic(true)}
+                      className="px-5 py-2.5 rounded-lg font-bold uppercase tracking-wider text-sm text-black bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 transition-all shadow-lg shadow-amber-500/20"
+                    >
+                      <Film className="inline-block w-4 h-4 mr-2 -mt-0.5" />
+                      Watch Cinematic Replay
+                    </button>
+                  ) : videoStatus === 'generating' ? (
+                    <div className="px-5 py-2.5 rounded-lg border border-amber-600/30 bg-black/60 backdrop-blur-sm">
+                      <Loader2 className="inline-block w-4 h-4 mr-2 -mt-0.5 animate-spin text-amber-400" />
+                      <span className="text-sm font-bold text-amber-400">
+                        Generating Replay… {videoProgress}/9 scenes
+                      </span>
+                      <div className="mt-2 h-1.5 rounded-full bg-amber-950/50 overflow-hidden">
+                        <motion.div
+                          className="h-full rounded-full bg-amber-500"
+                          animate={{ width: `${(videoProgress / 9) * 100}%` }}
+                          transition={{ type: 'spring', stiffness: 60, damping: 20 }}
+                        />
+                      </div>
+                    </div>
+                  ) : videoStatus === 'error' ? (
+                    <button
+                      onClick={generateCinematicVideo}
+                      className="px-5 py-2.5 rounded-lg font-bold uppercase tracking-wider text-sm text-amber-400 border border-red-500/40 bg-red-950/30 hover:bg-red-950/50 transition-all"
+                    >
+                      <Film className="inline-block w-4 h-4 mr-2 -mt-0.5" />
+                      Retry Cinematic Replay
+                    </button>
+                  ) : (
+                    <button
+                      onClick={generateCinematicVideo}
+                      className="px-5 py-2.5 rounded-lg font-bold uppercase tracking-wider text-sm text-amber-400 border border-amber-600/30 bg-amber-950/30 hover:bg-amber-950/50 transition-all"
+                    >
+                      <Film className="inline-block w-4 h-4 mr-2 -mt-0.5" />
+                      Generate Cinematic Replay
+                    </button>
+                  )}
+                </div>
               </motion.div>
             </motion.div>
           )}
         </AnimatePresence>
-
-        {/* ═══════════════════════════════════════════════════════════════
-            LAYER 3: Commentator PiP box (top-left)
-            ═══════════════════════════════════════════════════════════════ */}
-        <div className="absolute top-28 left-4 z-30 w-48">
-          <CommentatorBooth
-            streamId={avSessions.commentator?.streamId}
-            sessionId={avSessions.commentator?.sessionId}
-            iceServers={avSessions.commentator?.iceServers}
-            offer={avSessions.commentator?.offer}
-            latestCommentary={latestCommentary}
-            position="inline"
-            compact
-            isTTSSpeaking={tts.speaking && tts.activeRole === 'commentator'}
-            avApiBase={avApiBase}
-          />
-        </div>
 
         {/* ═══════════════════════════════════════════════════════════════
             LAYER 4: Bottom — Controls + Commentary Lower-Third + Chyron
@@ -936,7 +937,43 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
             />
           </div>
         )}
+
+        {/* Cinematic replay button for draw outcomes (no winnerBook) */}
+        {isCompleted && !winnerBook && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40">
+            {videoStatus === 'complete' && videoUrl ? (
+              <button
+                onClick={() => setShowCinematic(true)}
+                className="px-4 py-2 rounded-lg font-bold uppercase tracking-wider text-xs text-black bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 transition-all shadow-lg shadow-amber-500/20"
+              >
+                <Film className="inline-block w-3.5 h-3.5 mr-1.5 -mt-0.5" />
+                Watch Replay
+              </button>
+            ) : videoStatus === 'generating' ? (
+              <div className="px-4 py-2 rounded-lg border border-amber-600/30 bg-black/70 backdrop-blur-sm text-xs text-amber-400 font-bold">
+                <Loader2 className="inline-block w-3.5 h-3.5 mr-1.5 -mt-0.5 animate-spin" />
+                Generating… {videoProgress}/9
+              </div>
+            ) : videoStatus !== 'error' ? (
+              <button
+                onClick={generateCinematicVideo}
+                className="px-4 py-2 rounded-lg font-bold uppercase tracking-wider text-xs text-amber-400 border border-amber-600/30 bg-black/70 backdrop-blur-sm hover:bg-amber-950/50 transition-all"
+              >
+                <Film className="inline-block w-3.5 h-3.5 mr-1.5 -mt-0.5" />
+                Generate Replay
+              </button>
+            ) : (
+              <button
+                onClick={generateCinematicVideo}
+                className="px-4 py-2 rounded-lg font-bold uppercase tracking-wider text-xs text-amber-400 border border-red-500/40 bg-red-950/30 hover:bg-red-950/50 transition-all"
+              >
+                Retry Replay
+              </button>
+            )}
+          </div>
+        )}
       </div>
+      )}
     </>
   )
 }

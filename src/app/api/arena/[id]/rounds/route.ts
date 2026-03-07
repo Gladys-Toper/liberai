@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { resolveAuth } from '@/lib/auth/resolve-auth'
-import { executeRound, getDebateRounds, getDebateSession, type AVSessionIds } from '@/lib/agents/debate-engine'
+import { executeRound, getDebateRounds, getDebateSession } from '@/lib/agents/debate-engine'
 
 // POST /api/arena/[id]/rounds — Execute next round
 export async function POST(
@@ -30,19 +30,8 @@ export async function POST(
     )
   }
 
-  // Sprint 8: Accept AV session IDs from frontend for live avatar streaming
-  let avSessions: AVSessionIds | null = null
   try {
-    const body = await request.json()
-    if (body.avSessions) {
-      avSessions = body.avSessions as AVSessionIds
-    }
-  } catch {
-    // No body or not JSON — run without AV (text-only mode)
-  }
-
-  try {
-    const round = await executeRound(id, avSessions)
+    const round = await executeRound(id)
     return NextResponse.json({ round })
   } catch (err) {
     console.error('Failed to execute round:', err)

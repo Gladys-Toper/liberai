@@ -19,8 +19,6 @@
     "@ai-sdk/openai": "^3.0.39",
     "@ai-sdk/react": "^3.0.113",
     "@ai-sdk/xai": "^3.0.67",
-    "@cartesia/cartesia-js": "^3.0.0",
-    "@elevenlabs/elevenlabs-js": "^2.38.1",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@radix-ui/react-select": "^2.2.6",
     "@supabase/ssr": "^0.9.0",
@@ -46,7 +44,6 @@
     "react-reader": "^2.0.15",
     "recharts": "^3.7.0",
     "sharp": "^0.34.5",
-    "simli-client": "^3.0.1",
     "tailwind-merge": "^3.5.0",
     "viem": "^2.47.0",
     "zod": "^3.23.0"
