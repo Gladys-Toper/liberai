@@ -9,9 +9,9 @@ import {
   DefaultArenaModelProvider,
   type ArenaModelProvider,
 } from '@/lib/arena/model-provider'
+import { DIDAdapter, getVideoBackend } from '@/lib/arena/avatar-service'
 import { ElevenLabsAdapter, CartesiaAdapter, type IVoiceService } from '@/lib/arena/voice-service'
-import { SimliAdapter } from '@/lib/arena/avatar-service'
-import { AV_PROFILES, isAVConfigured } from '@/lib/arena/av-config'
+import { isAVConfigured } from '@/lib/arena/av-config'
 import {
   buildAxiomExtractionPrompt,
   buildCombatantPrompt,
@@ -23,43 +23,65 @@ import {
 } from './debate-prompts'
 
 // ============================================================================
-// AV Pipeline — Text → TTS → Simli lip-sync (best-effort, non-blocking)
+// AV Pipeline — best-effort, non-blocking
+//   ElevenLabs (debaters): text → ElevenLabs eleven_v3 → audio → D-ID lip-sync
+//   Cartesia (commentator): text → Cartesia sonic-3 → audio → D-ID lip-sync
+//   D-ID receives audio buffer and generates lip-synced video via WebRTC
 // ============================================================================
 
 const elevenlabs = new ElevenLabsAdapter()
 const cartesia = new CartesiaAdapter()
-const simli = new SimliAdapter()
 
 /**
- * Pipe spoken text through TTS → Simli avatar lip-sync.
- * This is best-effort: if AV is not configured or fails, we log and continue.
- * The debate text still gets stored in DB regardless.
+ * Pipe spoken text through TTS → D-ID lip-sync.
+ * Debaters use ElevenLabs (eleven_v3) for accented gravitas.
+ * Commentator uses Cartesia (sonic-3) for sub-100ms latency emotion tags.
+ * D-ID receives the audio and generates lip-synced video via WebRTC.
  *
  * @param text - The spoken text to synthesize
  * @param role - 'debater_a' | 'debater_b' | 'commentator'
- * @param avSessionId - The active Simli WebRTC session ID for this role
+ * @param streamId - D-ID stream ID
+ * @param sessionId - D-ID session ID
+ * @param voiceId - ElevenLabs voice ID (debaters) or Cartesia voice ID (commentator)
  */
 async function pipeAVForRole(
   text: string,
   role: 'debater_a' | 'debater_b' | 'commentator',
-  avSessionId: string | null,
+  streamId: string | null,
+  sessionId: string | null,
+  voiceId?: string,
 ): Promise<void> {
-  if (!avSessionId || !isAVConfigured()) return
+  if (!streamId || !isAVConfigured()) return
 
+  const backend = getVideoBackend()
   try {
-    const profile = AV_PROFILES[role]
-    if (!profile?.voiceId) return
+    if (backend === 'did') {
+      // Select TTS provider by role:
+      //   Debaters → ElevenLabs eleven_v3 (accents, gravitas, expressiveness)
+      //   Commentator → Cartesia sonic-3 (sub-100ms, emotion tags, sports energy)
+      const isCommentator = role === 'commentator'
+      const tts: IVoiceService = isCommentator ? cartesia : elevenlabs
+      const ttsVoiceId = voiceId || (isCommentator
+        ? (process.env.CARTESIA_VOICE_COMMENTATOR || '')
+        : (role === 'debater_a'
+          ? (process.env.ELEVENLABS_VOICE_A || '')
+          : (process.env.ELEVENLABS_VOICE_B || '')))
 
-    // Select TTS provider based on role config
-    const tts: IVoiceService = profile.ttsProvider === 'cartesia' ? cartesia : elevenlabs
+      if (!ttsVoiceId) {
+        // No voice configured — fall back to D-ID built-in Azure Neural TTS
+        const did = new DIDAdapter()
+        await did.sendTalkText(streamId, sessionId || '', text, 'en-GB-RyanNeural')
+        return
+      }
 
-    // Step 1: Text → Audio (PCM 16-bit 16kHz)
-    const audioBuffer = await tts.streamAudio(text, profile.voiceId)
+      // Step 1: Text → Audio (PCM 16-bit 16kHz via ElevenLabs/Cartesia)
+      const audioBuffer = await tts.streamAudio(text, ttsVoiceId)
 
-    // Step 2: Audio → Simli lip-sync (piped to WebRTC session, auto-streams to browser)
-    await simli.pipeAudioToAvatar(audioBuffer, avSessionId)
+      // Step 2: Audio → D-ID for lip-synced video generation
+      const did = new DIDAdapter()
+      await did.sendTalkAudio(streamId, sessionId || '', audioBuffer)
+    }
   } catch (err) {
-    // AV is best-effort — log but don't crash the debate
     console.error(`[AV] Failed to pipe audio for ${role}:`, err)
   }
 }
@@ -232,8 +254,8 @@ export async function createDebateSession(
 ): Promise<{ session: DebateSession; axioms: DebateAxiom[] }> {
   const db = getServiceClient()
 
-  // Random model assignment: one side gets Claude, the other gets OpenAI
-  const provider = DefaultArenaModelProvider.createWithRandomAssignment()
+  // Fixed model assignment: both debaters use OpenAI GPT
+  const provider = DefaultArenaModelProvider.create()
 
   // Validate books exist
   const [bookA, bookB] = await Promise.all([
@@ -309,8 +331,8 @@ export async function createDebateSession(
       initiated_by: initiatedBy,
       crucible_question: crucibleQuestion,
       max_rounds: maxRounds,
-      model_a: provider.modelA,
-      model_b: provider.modelB,
+      model_a: 'openai',
+      model_b: 'openai',
       status: 'extracting',
     })
     .select()
@@ -340,8 +362,8 @@ export async function createDebateSession(
       crucibleQuestion,
       axiomCountA: axiomsA.length,
       axiomCountB: axiomsB.length,
-      modelA: provider.modelA,
-      modelB: provider.modelB,
+      modelA: 'openai',
+      modelB: 'openai',
     },
     sourceType: 'system',
   })
@@ -397,7 +419,7 @@ async function extractAxioms(
   )
 
   const { text } = await generateText({
-    model: provider.getModel('axiom_extractor', side),
+    model: provider.getModel('axiom_extractor'),
     prompt,
     temperature: 0.3,
   })
@@ -433,14 +455,25 @@ async function extractAxioms(
 // ============================================================================
 
 /**
+ * AV session info for a single avatar role.
+ * streamId + sessionId are D-ID identifiers; voiceId is the
+ * ElevenLabs (debaters) or Cartesia (commentator) voice ID.
+ */
+export interface AVSessionInfo {
+  streamId: string
+  sessionId: string
+  voiceId?: string
+}
+
+/**
  * AV session IDs for live avatar streaming.
  * Pass from the frontend when WebRTC sessions are active.
  * If null/undefined, debate runs text-only (no TTS/lip-sync).
  */
 export interface AVSessionIds {
-  debaterA: string | null
-  debaterB: string | null
-  commentator: string | null
+  debaterA: AVSessionInfo | null
+  debaterB: AVSessionInfo | null
+  commentator: AVSessionInfo | null
 }
 
 export async function executeRound(
@@ -550,7 +583,7 @@ export async function executeRound(
   )
 
   const { text: attackText } = await generateText({
-    model: provider.getModel('debater', attackerSide),
+    model: provider.getModel('debater'),
     prompt: attackPrompt,
     temperature: 0.5,
   })
@@ -569,9 +602,8 @@ export async function executeRound(
 
   // AV Pipeline: Pipe attack speech to avatar (non-blocking best-effort)
   const attackAvRole = attackerSide === 'a' ? 'debater_a' : 'debater_b' as const
-  const attackAvSession = avSessions?.[attackerSide === 'a' ? 'debaterA' : 'debaterB'] ?? null
-  // Use claim as the spoken text — it's the distilled argument
-  pipeAVForRole(attackPayload.claim, attackAvRole, attackAvSession).catch(() => {})
+  const attackAv = avSessions?.[attackerSide === 'a' ? 'debaterA' : 'debaterB'] ?? null
+  pipeAVForRole(attackPayload.claim, attackAvRole, attackAv?.streamId ?? null, attackAv?.sessionId ?? null, attackAv?.voiceId).catch(() => {})
 
   // Insert attack argument
   await db.from('debate_arguments').insert({
@@ -611,7 +643,7 @@ export async function executeRound(
   )
 
   const { text: defenseText } = await generateText({
-    model: provider.getModel('debater', defenderSide),
+    model: provider.getModel('debater'),
     prompt: defensePrompt,
     temperature: 0.5,
   })
@@ -631,8 +663,8 @@ export async function executeRound(
 
   // AV Pipeline: Pipe defense speech to avatar (non-blocking best-effort)
   const defenseAvRole = defenderSide === 'a' ? 'debater_a' : 'debater_b' as const
-  const defenseAvSession = avSessions?.[defenderSide === 'a' ? 'debaterA' : 'debaterB'] ?? null
-  pipeAVForRole(defensePayload.claim, defenseAvRole, defenseAvSession).catch(() => {})
+  const defenseAv = avSessions?.[defenderSide === 'a' ? 'debaterA' : 'debaterB'] ?? null
+  pipeAVForRole(defensePayload.claim, defenseAvRole, defenseAv?.streamId ?? null, defenseAv?.sessionId ?? null, defenseAv?.voiceId).catch(() => {})
 
   // Insert defense argument
   await db.from('debate_arguments').insert({
@@ -771,7 +803,8 @@ export async function executeRound(
   })
 
   // AV Pipeline: Pipe commentary to commentator avatar (non-blocking best-effort)
-  pipeAVForRole(commentary.trim(), 'commentator', avSessions?.commentator ?? null).catch(() => {})
+  const commentatorAv = avSessions?.commentator ?? null
+  pipeAVForRole(commentary.trim(), 'commentator', commentatorAv?.streamId ?? null, commentatorAv?.sessionId ?? null, commentatorAv?.voiceId).catch(() => {})
 
   // ---- STEP 6: Finalize round ----
   await db

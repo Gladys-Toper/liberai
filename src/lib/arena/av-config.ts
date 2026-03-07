@@ -1,62 +1,85 @@
-// Sprint 8: AV Studio — Character voice/face/model mapping
-// Maps each debate role to its TTS model, voice ID, and Simli face ID
+/**
+ * AV Configuration — dynamic resolution from author profiles.
+ *
+ * Tiered video system:
+ *   Tier 1: D-ID (primary) — accepts any portrait URL, generates AI video
+ *   Tier 2: Simli (alternative) — requires pre-uploaded faceId
+ *   Tier 3: Animated portrait (fallback) — CSS/Canvas animation with browser TTS
+ *
+ * Voice system:
+ *   With D-ID: Microsoft Azure Neural voices (accent-appropriate, built into D-ID)
+ *   With Simli: ElevenLabs/Cartesia TTS piped to Simli
+ *   Fallback: Browser Web Speech API with accent-tuned parameters
+ */
 
-export type TTSProvider = 'elevenlabs' | 'cartesia'
+import { getVideoBackend, type VideoBackend } from './avatar-service'
+
+export type TTSProvider = 'did-builtin' | 'elevenlabs' | 'cartesia' | 'browser'
 
 export interface AVProfile {
-  faceId: string           // Simli dashboard portrait ID
-  voiceId: string          // TTS voice profile ID
-  ttsModel: string         // TTS model ID
-  ttsProvider: TTSProvider // Which TTS adapter to use
+  /** Portrait image URL (auto-resolved from Wikipedia) */
+  portraitUrl: string | null
+  /** D-ID/Simli stream/face identifier */
+  videoId: string | null
+  /** Microsoft Azure Neural voice ID (for D-ID) */
+  didVoiceId: string
+  /** ElevenLabs voice ID (for Simli pipeline) */
+  elevenLabsVoiceId: string
+  /** TTS provider in use */
+  ttsProvider: TTSProvider
+  /** Video backend in use */
+  videoBackend: VideoBackend
 }
 
 /**
- * AV profiles for each debate character.
- * faceIds come from uploading branded portraits to Simli dashboard.
- * voiceIds come from ElevenLabs Voice Design or Cartesia voice library.
+ * Build an AV profile for a debate participant.
+ * Automatically selects the best available video + TTS stack.
  */
-export const AV_PROFILES: Record<string, AVProfile> = {
-  debater_a: {
-    faceId: process.env.SIMLI_FACE_A || '',
-    voiceId: process.env.ELEVENLABS_VOICE_A || '',
-    ttsModel: 'eleven_v3',      // Maximum expressiveness for historical gravitas
-    ttsProvider: 'elevenlabs',
-  },
-  debater_b: {
-    faceId: process.env.SIMLI_FACE_B || '',
-    voiceId: process.env.ELEVENLABS_VOICE_B || '',
-    ttsModel: 'eleven_v3',
-    ttsProvider: 'elevenlabs',
-  },
-  commentator: {
-    faceId: process.env.SIMLI_FACE_COMMENTATOR || '',
-    voiceId: process.env.CARTESIA_VOICE_COMMENTATOR || '',
-    ttsModel: 'sonic-3',        // Sub-100ms latency for live commentary
-    ttsProvider: 'cartesia',
-  },
+export function buildAVProfile(opts: {
+  portraitUrl: string | null
+  didVoiceId: string
+  nationality: string | null
+  role: 'debater_a' | 'debater_b' | 'commentator'
+}): AVProfile {
+  const backend = getVideoBackend()
+
+  let ttsProvider: TTSProvider = 'browser'
+  if (backend === 'did') ttsProvider = 'did-builtin'
+  else if (backend === 'simli' && process.env.ELEVENLABS_API_KEY) ttsProvider = 'elevenlabs'
+  else if (backend === 'simli' && process.env.CARTESIA_API_KEY) ttsProvider = 'cartesia'
+
+  // For Simli, use pre-configured face IDs
+  let videoId: string | null = null
+  if (backend === 'simli') {
+    const faceEnvMap: Record<string, string> = {
+      debater_a: process.env.SIMLI_FACE_A || '',
+      debater_b: process.env.SIMLI_FACE_B || '',
+      commentator: process.env.SIMLI_FACE_COMMENTATOR || '',
+    }
+    videoId = faceEnvMap[opts.role] || null
+  }
+
+  // For Simli, use pre-configured ElevenLabs voice IDs
+  const voiceEnvMap: Record<string, string> = {
+    debater_a: process.env.ELEVENLABS_VOICE_A || '',
+    debater_b: process.env.ELEVENLABS_VOICE_B || '',
+    commentator: process.env.CARTESIA_VOICE_COMMENTATOR || '',
+  }
+
+  return {
+    portraitUrl: opts.portraitUrl,
+    videoId,
+    didVoiceId: opts.didVoiceId,
+    elevenLabsVoiceId: voiceEnvMap[opts.role] || '',
+    ttsProvider,
+    videoBackend: backend,
+  }
 }
 
-/**
- * Check if AV is configured (all required env vars present).
- * If not configured, debate still works — just without video/audio.
- */
+/** Commentator D-ID voice — energetic, American sports-caster */
+export const COMMENTATOR_DID_VOICE = 'en-US-GuyNeural'
+
+/** Check if any video service is available */
 export function isAVConfigured(): boolean {
-  return !!(
-    process.env.SIMLI_API_KEY &&
-    process.env.SIMLI_FACE_A &&
-    process.env.SIMLI_FACE_B &&
-    process.env.ELEVENLABS_API_KEY &&
-    process.env.ELEVENLABS_VOICE_A &&
-    process.env.ELEVENLABS_VOICE_B &&
-    process.env.CARTESIA_API_KEY &&
-    process.env.CARTESIA_VOICE_COMMENTATOR &&
-    process.env.SIMLI_FACE_COMMENTATOR
-  )
+  return getVideoBackend() !== 'none'
 }
-
-// TTS model reference:
-// ElevenLabs: 'eleven_v3' (most expressive) | 'eleven_flash_v2_5' (fastest, ~75ms)
-//             | 'eleven_multilingual_v2' (emotionally nuanced) | 'eleven_turbo_v2_5' (~250ms)
-// Cartesia:   'sonic-3' (latest) | 'sonic-3-latest' | 'sonic-3-2026-01-12' (snapshot)
-//
-// All audio output: PCM 16-bit signed LE, 16kHz sample rate (Simli requirement)

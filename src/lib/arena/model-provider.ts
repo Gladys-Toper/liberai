@@ -1,14 +1,18 @@
 // Sprint 8: Multi-Model Arena — Provider adapter for debate roles
+//
+// Model assignments (fixed):
+//   Debaters (both sides): OpenAI GPT
+//   Referee/Judge:         Google Gemini
+//   Commentator:           xAI Grok (falls back to Gemini if XAI_API_KEY missing)
+//   Synthesizer:           Google Gemini
+
 import type { LanguageModel } from 'ai'
-import { anthropic } from '@ai-sdk/anthropic'
 import { openai } from '@ai-sdk/openai'
 import { google } from '@ai-sdk/google'
 import { xai } from '@ai-sdk/xai'
 
 // Model key type for pricing lookups
-export type ModelKey = 'claude' | 'openai' | 'gemini' | 'grok'
-
-export type DebaterModel = 'claude' | 'openai'
+export type ModelKey = 'openai' | 'gemini' | 'grok'
 
 export type DebateRole =
   | 'debater'
@@ -21,10 +25,8 @@ export type DebateRole =
 const isXAIConfigured = !!process.env.XAI_API_KEY
 
 // Concrete model instances via Vercel AI SDK
-// Uses production-verified model IDs from the chat route
 // Falls back to Gemini for commentator when XAI key is not configured
 const MODEL_MAP: Record<ModelKey, LanguageModel> = {
-  claude: anthropic('claude-sonnet-4-20250514'),
   openai: openai('gpt-5.4'),
   gemini: google('gemini-2.5-flash'),
   grok: isXAIConfigured
@@ -33,53 +35,38 @@ const MODEL_MAP: Record<ModelKey, LanguageModel> = {
 }
 
 export interface ArenaModelProvider {
-  /** Get the LLM model for a given debate role and optional side */
-  getModel(role: DebateRole, side?: 'a' | 'b'): LanguageModel
-  /** Get the pricing key for a given role/side (maps to MODEL_PRICING keys) */
-  getModelKey(role: DebateRole, side?: 'a' | 'b'): ModelKey
-  /** Model assignment for side A */
-  readonly modelA: DebaterModel
-  /** Model assignment for side B */
-  readonly modelB: DebaterModel
+  /** Get the LLM model for a given debate role */
+  getModel(role: DebateRole): LanguageModel
+  /** Get the pricing key for a given role (maps to MODEL_PRICING keys) */
+  getModelKey(role: DebateRole): ModelKey
 }
 
 export class DefaultArenaModelProvider implements ArenaModelProvider {
-  constructor(
-    public readonly modelA: DebaterModel,
-    public readonly modelB: DebaterModel,
-  ) {}
-
   /**
-   * Create a provider with random Claude/OpenAI assignment.
-   * One side gets Claude, the other gets OpenAI — coin flip decides which.
+   * Create the standard arena provider.
+   * Both debaters always use OpenAI GPT.
    */
-  static createWithRandomAssignment(): DefaultArenaModelProvider {
-    const coinFlip = Math.random() < 0.5
-    return new DefaultArenaModelProvider(
-      coinFlip ? 'claude' : 'openai',
-      coinFlip ? 'openai' : 'claude',
-    )
+  static create(): DefaultArenaModelProvider {
+    return new DefaultArenaModelProvider()
   }
 
   /**
    * Reconstruct provider from persisted session data.
+   * Kept for backwards compatibility with existing sessions.
    */
-  static fromSession(modelA: string, modelB: string): DefaultArenaModelProvider {
-    return new DefaultArenaModelProvider(
-      (modelA as DebaterModel) || 'openai',
-      (modelB as DebaterModel) || 'openai',
-    )
+  static fromSession(_modelA?: string, _modelB?: string): DefaultArenaModelProvider {
+    return new DefaultArenaModelProvider()
   }
 
-  getModel(role: DebateRole, side?: 'a' | 'b'): LanguageModel {
-    return MODEL_MAP[this.getModelKey(role, side)]
+  getModel(role: DebateRole): LanguageModel {
+    return MODEL_MAP[this.getModelKey(role)]
   }
 
-  getModelKey(role: DebateRole, side?: 'a' | 'b'): ModelKey {
+  getModelKey(role: DebateRole): ModelKey {
     switch (role) {
       case 'debater':
       case 'axiom_extractor':
-        return side === 'a' ? this.modelA : this.modelB
+        return 'openai'
       case 'referee':
       case 'synthesizer':
         return 'gemini'

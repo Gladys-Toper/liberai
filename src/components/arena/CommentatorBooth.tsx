@@ -7,6 +7,7 @@ import { AvatarVideo } from './AvatarVideo'
 
 interface CommentatorBoothProps {
   sessionId?: string | null
+  streamId?: string | null
   iceServers?: RTCIceServer[]
   offer?: RTCSessionDescriptionInit
   latestCommentary?: string | null
@@ -14,15 +15,25 @@ interface CommentatorBoothProps {
   position?: 'fixed' | 'inline'
   /** Compact mode for small inline windows */
   compact?: boolean
+  /** Browser TTS is currently speaking as commentator */
+  isTTSSpeaking?: boolean
+  /** Portrait URL for commentator avatar fallback */
+  portraitUrl?: string | null
+  /** AV API base for D-ID relay */
+  avApiBase?: string
 }
 
 export function CommentatorBooth({
   sessionId,
+  streamId,
   iceServers,
   offer,
   latestCommentary,
   position = 'fixed',
   compact = false,
+  isTTSSpeaking = false,
+  portraitUrl,
+  avApiBase,
 }: CommentatorBoothProps) {
   const [minimized, setMinimized] = useState(false)
 
@@ -55,12 +66,16 @@ export function CommentatorBooth({
         {/* Avatar */}
         <div className={compact ? 'p-1' : 'p-1.5'}>
           <AvatarVideo
+            streamId={streamId}
             sessionId={sessionId || null}
             iceServers={iceServers}
             offer={offer}
             side="a"
             fallbackLabel="Grok"
+            portraitUrl={portraitUrl}
             isActive
+            isTTSSpeaking={isTTSSpeaking}
+            avApiBase={avApiBase}
           />
         </div>
       </div>
@@ -134,12 +149,16 @@ export function CommentatorBooth({
               {/* Avatar video */}
               <div className="p-1.5">
                 <AvatarVideo
+                  streamId={streamId}
                   sessionId={sessionId || null}
                   iceServers={iceServers}
                   offer={offer}
                   side="a"
                   fallbackLabel="Grok"
+                  portraitUrl={portraitUrl}
                   isActive
+                  isTTSSpeaking={isTTSSpeaking}
+                  avApiBase={avApiBase}
                 />
               </div>
 

@@ -44,22 +44,29 @@ export async function GET(
     // Get author names separately
     const authorIds = [bookAData?.author_id, bookBData?.author_id].filter(Boolean)
     const { data: authors } = authorIds.length
-      ? await db.from('authors').select('id, display_name').in('id', authorIds)
+      ? await db.from('authors').select('id, display_name, portrait_url, nationality').in('id', authorIds)
       : { data: [] }
-    const authorMap = new Map((authors || []).map((a: { id: string; display_name: string }) => [a.id, a.display_name]))
+    const authorMap = new Map((authors || []).map((a: { id: string; display_name: string; portrait_url?: string | null; nationality?: string | null }) => [a.id, a]))
+
+    const authorA = authorMap.get(bookAData?.author_id)
+    const authorB = authorMap.get(bookBData?.author_id)
 
     const bookA = bookAData ? {
       id: bookAData.id,
       title: bookAData.title,
-      author_name: authorMap.get(bookAData.author_id) || 'Unknown',
+      author_name: authorA?.display_name || 'Unknown',
       cover_url: bookAData.cover_url,
+      portrait_url: authorA?.portrait_url || null,
+      nationality: authorA?.nationality || null,
     } : null
 
     const bookB = bookBData ? {
       id: bookBData.id,
       title: bookBData.title,
-      author_name: authorMap.get(bookBData.author_id) || 'Unknown',
+      author_name: authorB?.display_name || 'Unknown',
       cover_url: bookBData.cover_url,
+      portrait_url: authorB?.portrait_url || null,
+      nationality: authorB?.nationality || null,
     } : null
 
     // Sprint 8: Fetch pool state for prediction market
