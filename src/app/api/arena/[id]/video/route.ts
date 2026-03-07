@@ -24,8 +24,11 @@ import {
 import { buildTimeline } from '@/lib/arena/timeline-sync'
 import type { SceneChunk } from '@/lib/arena/timeline-sync'
 
-// One step = one LTX API call (~60-120s) + upload (~10-20s). Fits in 300s.
-export const maxDuration = 300
+// Fluid Compute (Pro plan) allows up to 800s per invocation.
+// Process multiple chunks per invocation to minimize fragile self-chaining.
+// Each LTX call ~60-120s + upload ~10-20s = ~105s per chunk.
+// At 800s limit: ~6-7 chunks per invocation safely (leave 100s buffer).
+export const maxDuration = 800
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -337,92 +340,135 @@ export async function POST(
   }
 }
 
-// ─── Step Runner (executes inside after()) ───────────────────────
+// ─── Multi-Chunk Step Runner ─────────────────────────────────────
+// Processes as many chunks as possible within the invocation time limit
+// (maxDuration=800s, budget ~700s). Only self-chains if chunks remain.
+// This eliminates the fragile one-chunk-per-invocation pattern.
+
+const INVOCATION_BUDGET_MS = 700_000 // Leave 100s buffer before 800s timeout
 
 async function runStep(sessionId: string, state: VideoState) {
   const db = getServiceClient()
   const videoService = createVideoService()
-  const stepStart = Date.now()
+  const invocationStart = Date.now()
+
+  let currentIndex = state.currentChunkIndex
+  let currentVideoUri = state.videoUri
+  let avgSeconds = state.avgSecondsPerStep
 
   try {
-    const { chunks, currentChunkIndex, videoUri } = state
-    const chunk = chunks[currentChunkIndex]
-    const isFirst = currentChunkIndex === 0
-    const isLast = currentChunkIndex === chunks.length - 1
+    const { chunks } = state
 
-    let mp4Buffer: Buffer
+    while (currentIndex < chunks.length) {
+      const chunk = chunks[currentIndex]
+      const isFirst = currentIndex === 0
+      const isLast = currentIndex === chunks.length - 1
+      const chunkStart = Date.now()
 
-    if (isFirst) {
-      console.log(`[Video] [${sessionId}] Step 0: generateFirst (${chunk.durationSeconds}s)`)
-      mp4Buffer = await videoService.generateFirst({
-        prompt: chunk.videoPrompt,
-        duration: chunk.durationSeconds,
-        cameraMotion: chunk.cameraMotion,
-      })
-      console.log(`[Video] [${sessionId}] First chunk: ${mp4Buffer.length} bytes`)
-    } else {
-      if (!videoUri) throw new Error(`No videoUri for extend at chunk ${currentChunkIndex}`)
-      console.log(`[Video] [${sessionId}] Step ${currentChunkIndex}: extend (${chunk.durationSeconds}s)`)
-      mp4Buffer = await videoService.extendVideo({
-        videoUri,
-        prompt: chunk.videoPrompt,
-        duration: chunk.durationSeconds,
-      })
-      console.log(`[Video] [${sessionId}] Chunk ${currentChunkIndex + 1}: ${mp4Buffer.length} bytes`)
+      // Time budget check: can we fit another chunk? (skip for first chunk)
+      if (!isFirst) {
+        const elapsed = Date.now() - invocationStart
+        const estimatedChunkTime = avgSeconds * 1000 + 30_000 // avg + 30s buffer
+        if (elapsed + estimatedChunkTime > INVOCATION_BUDGET_MS) {
+          console.log(`[Video] [${sessionId}] Time budget reached (${Math.round(elapsed / 1000)}s elapsed). Chaining for remaining ${chunks.length - currentIndex} chunks.`)
+          break
+        }
+      }
+
+      let mp4Buffer: Buffer
+
+      if (isFirst) {
+        console.log(`[Video] [${sessionId}] Chunk 0/${chunks.length}: generateFirst (${chunk.durationSeconds}s)`)
+        mp4Buffer = await videoService.generateFirst({
+          prompt: chunk.videoPrompt,
+          duration: chunk.durationSeconds,
+          cameraMotion: chunk.cameraMotion,
+        })
+        console.log(`[Video] [${sessionId}] First chunk: ${mp4Buffer.length} bytes`)
+      } else {
+        if (!currentVideoUri) throw new Error(`No videoUri for extend at chunk ${currentIndex}`)
+        console.log(`[Video] [${sessionId}] Chunk ${currentIndex}/${chunks.length}: extend (${chunk.durationSeconds}s)`)
+        mp4Buffer = await videoService.extendVideo({
+          videoUri: currentVideoUri,
+          prompt: chunk.videoPrompt,
+          duration: chunk.durationSeconds,
+        })
+        console.log(`[Video] [${sessionId}] Chunk ${currentIndex}: ${mp4Buffer.length} bytes`)
+      }
+
+      const chunkDuration = Math.round((Date.now() - chunkStart) / 1000)
+      avgSeconds = Math.round(
+        (avgSeconds * currentIndex + chunkDuration) / (currentIndex + 1),
+      )
+
+      if (isLast) {
+        // ── Finalize: upload to Supabase Storage + build timeline ──
+        console.log(`[Video] [${sessionId}] Final chunk done. Uploading to storage (${mp4Buffer.length} bytes)...`)
+        const videoUrl = await uploadVideoToStorage(mp4Buffer, sessionId)
+        const timeline = buildTimeline(chunks)
+
+        await db
+          .from('debate_sessions')
+          .update({
+            video_status: 'complete',
+            video_progress: chunks.length + 1,
+            video_url: videoUrl,
+            video_timeline: timeline,
+            video_state: {
+              ...state,
+              currentChunkIndex: currentIndex + 1,
+              videoUri: currentVideoUri,
+              stepInProgress: false,
+              avgSecondsPerStep: avgSeconds,
+            },
+          })
+          .eq('id', sessionId)
+
+        console.log(`[Video] [${sessionId}] ✓ Pipeline complete (${Math.round((Date.now() - invocationStart) / 1000)}s): ${videoUrl}`)
+        return // All done!
+      }
+
+      // ── Upload to LTX for next extend ──
+      console.log(`[Video] [${sessionId}] Uploading to LTX for next extend...`)
+      currentVideoUri = await videoService.uploadVideo(mp4Buffer)
+      currentIndex += 1
+
+      // Update progress in DB after each chunk
+      await db
+        .from('debate_sessions')
+        .update({
+          video_progress: currentIndex + 1,
+          video_state: {
+            ...state,
+            currentChunkIndex: currentIndex,
+            videoUri: currentVideoUri,
+            stepInProgress: true,
+            stepStartedAt: new Date().toISOString(),
+            avgSecondsPerStep: avgSeconds,
+          },
+        })
+        .eq('id', sessionId)
+
+      console.log(`[Video] [${sessionId}] Chunk ${currentIndex - 1} done (${chunkDuration}s, avg=${avgSeconds}s). ${chunks.length - currentIndex} remaining.`)
     }
 
-    const stepDuration = Math.round((Date.now() - stepStart) / 1000)
-    // Running average for time estimates
-    const avgSeconds = Math.round(
-      (state.avgSecondsPerStep * currentChunkIndex + stepDuration) / (currentChunkIndex + 1),
-    )
-
-    if (isLast) {
-      // ── Finalize: upload to Supabase Storage + build timeline ──
-      console.log(`[Video] [${sessionId}] Final chunk done. Uploading to storage (${mp4Buffer.length} bytes)...`)
-      const videoUrl = await uploadVideoToStorage(mp4Buffer, sessionId)
-      const timeline = buildTimeline(chunks)
-
+    // ── If we broke out of the loop (time budget), self-chain for the rest ──
+    if (currentIndex < chunks.length) {
+      // Mark not in progress so the next POST can pick it up
       await db
         .from('debate_sessions')
         .update({
-          video_status: 'complete',
-          video_progress: chunks.length + 1,
-          video_url: videoUrl,
-          video_timeline: timeline,
           video_state: {
             ...state,
-            currentChunkIndex: currentChunkIndex + 1,
+            currentChunkIndex: currentIndex,
+            videoUri: currentVideoUri,
             stepInProgress: false,
             avgSecondsPerStep: avgSeconds,
           },
         })
         .eq('id', sessionId)
 
-      console.log(`[Video] [${sessionId}] Pipeline complete: ${videoUrl}`)
-    } else {
-      // ── Upload to LTX for next extend, then chain ──
-      console.log(`[Video] [${sessionId}] Uploading to LTX for next extend...`)
-      const newVideoUri = await videoService.uploadVideo(mp4Buffer)
-      console.log(`[Video] [${sessionId}] URI: ${newVideoUri}`)
-
-      await db
-        .from('debate_sessions')
-        .update({
-          video_progress: currentChunkIndex + 2,
-          video_state: {
-            ...state,
-            currentChunkIndex: currentChunkIndex + 1,
-            videoUri: newVideoUri,
-            stepInProgress: false,
-            avgSecondsPerStep: avgSeconds,
-          },
-        })
-        .eq('id', sessionId)
-
-      console.log(`[Video] [${sessionId}] Step ${currentChunkIndex} done (${stepDuration}s). Chaining next...`)
-
-      // Self-chain: trigger next step via internal HTTP call
+      console.log(`[Video] [${sessionId}] Self-chaining for chunks ${currentIndex}-${chunks.length - 1}...`)
       await triggerNextStep(sessionId)
     }
   } catch (err) {
