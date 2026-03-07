@@ -53,21 +53,40 @@ function isInternalCall(request: Request): boolean {
 
 /** Trigger the next pipeline step via self-invocation */
 async function triggerNextStep(sessionId: string) {
-  const baseUrl = process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000')
+  // Prefer the stable production URL over the per-deployment VERCEL_URL
+  // VERCEL_URL changes with each deploy (e.g. liberai-abc123.vercel.app)
+  // and can hit Deployment Protection. The production URL is always stable.
+  const baseUrl =
+    process.env.VERCEL_PROJECT_PRODUCTION_URL
+      ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+      : process.env.NEXT_PUBLIC_APP_URL
+        ? process.env.NEXT_PUBLIC_APP_URL
+        : process.env.VERCEL_URL
+          ? `https://${process.env.VERCEL_URL}`
+          : 'http://localhost:3000'
+
+  const url = `${baseUrl}/api/arena/${sessionId}/video`
+  console.log(`[Video] [${sessionId}] Self-chain → ${url}`)
 
   try {
-    const res = await fetch(`${baseUrl}/api/arena/${sessionId}/video`, {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 30_000) // 30s timeout
+
+    const res = await fetch(url, {
       method: 'POST',
       headers: {
         'x-video-pipeline-key': process.env.VIDEO_PIPELINE_SECRET || '',
         'Content-Type': 'application/json',
       },
+      signal: controller.signal,
     })
+    clearTimeout(timeout)
+
     if (!res.ok) {
       const err = await res.text()
       console.error(`[Video] [${sessionId}] Self-trigger failed (${res.status}): ${err}`)
+    } else {
+      console.log(`[Video] [${sessionId}] Self-trigger success (${res.status})`)
     }
   } catch (err) {
     console.error(`[Video] [${sessionId}] Self-trigger error:`, err)

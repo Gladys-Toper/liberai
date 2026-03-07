@@ -157,6 +157,8 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
   const [videoDurationSeconds, setVideoDurationSeconds] = useState(0)
   const [showCinematic, setShowCinematic] = useState(false)
   const [posterUrl, setPosterUrl] = useState<string | null>(null)
+  const stallCountRef = useRef(0)
+  const lastProgressRef = useRef(0)
 
   const { session, bookA, bookB, axioms, rounds, arguments: args } = state
   const modelA = state.modelA || session.model_a || 'openai'
@@ -242,9 +244,11 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
     }
   }, [session.id, session.status])
 
-  // ── Poll video generation progress ────────────────────────────────
+  // ── Poll video generation progress (with stall detection) ────────
   useEffect(() => {
     if (videoStatus !== 'generating') return
+    stallCountRef.current = 0
+    lastProgressRef.current = 0
 
     const interval = setInterval(async () => {
       try {
@@ -257,11 +261,27 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
           setVideoStatus('complete')
           setVideoProgress(data.total || 0)
           setVideoEstimatedSeconds(0)
+          stallCountRef.current = 0
         } else if (data.status === 'generating') {
           setVideoProgress(data.progress || 0)
           setVideoTotal(data.total || 0)
           setVideoEstimatedSeconds(data.estimatedSecondsRemaining || 0)
           setVideoDurationSeconds(data.videoDurationSeconds || 0)
+
+          // Stall detection: if progress unchanged for 3 polls (~15s)
+          // and no step in progress, re-trigger pipeline
+          if (data.progress === lastProgressRef.current && !data.stepInProgress) {
+            stallCountRef.current += 1
+            if (stallCountRef.current >= 3) {
+              console.log(`[Video] Stall detected at chunk ${data.progress}/${data.total}. Re-triggering pipeline...`)
+              stallCountRef.current = 0
+              // Re-trigger — POST will pick up where it left off
+              fetch(`/api/arena/${session.id}/video`, { method: 'POST' }).catch(() => {})
+            }
+          } else {
+            stallCountRef.current = 0
+          }
+          lastProgressRef.current = data.progress || 0
         } else if (data.status === 'failed') {
           setVideoStatus('failed')
         }
