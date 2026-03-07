@@ -5,15 +5,10 @@
 // Converts a completed debate transcript (rounds, axioms, arguments, commentary)
 // into an array of SceneChunks, each with a rich video prompt for LTX 2.3.
 //
-// Target video length: 2-3 minutes depending on round count.
-// Structure per round: attack+defense merged (18s via extend) + commentary (10s) = 28s/round
-// Plus establishing (10s via generateFirst) + intro (10s via extend) + verdict (10s) = 30s
-// Chunk count: 2 + 2*rounds + 1 → 5 rounds = 13 chunks (vs 17 at 10s each)
-// 5 rounds → 178s (~3 min), 7 rounds → 234s (~4 min)
-//
-// NOTE: ltx-2-3-pro text-to-video (generateFirst) caps at 10s.
-// ltx-2-3-pro extend supports up to 20s, but we use 18s (432 frames)
-// to leave ~3s (73 frames) for context within the 505-frame limit.
+// Target video length: 3-5 minutes depending on round count.
+// Structure per round: attack (10s) + defense (10s) + commentary (10s) = 30s/round
+// Plus establishing (10s) + intro (10s) + verdict (10s) = 30s overhead
+// 5 rounds → 180s (3 min), 7 rounds → 240s (4 min), 10 rounds → 330s (5.5 min)
 //
 // IMPORTANT: Because we use LTX's extend endpoint, each chunk (after the first)
 // describes what happens NEXT — a continuation from the previous scene's last frame.
@@ -90,7 +85,7 @@ export async function generateScreenplay(
   const maxHpA = axiomsA.length * 100
   const maxHpB = axiomsB.length * 100
 
-  // ── Scene 1: Establishing shot (10s, generateFirst — ltx-2-3-pro caps at 10s) ──
+  // ── Scene 1: Establishing shot (generateFirst) ──
   chunks.push({
     index: chunkIndex++,
     durationSeconds: 10,
@@ -104,14 +99,14 @@ export async function generateScreenplay(
     hpPercentB: 100,
   })
 
-  // ── Scene 2: Commentator intro (10s, extend) ──
+  // ── Scene 2: Commentator intro (extend) ──
   chunks.push({
     index: chunkIndex++,
     durationSeconds: 10,
     roundNumber: 0,
     sceneType: 'intro',
     videoPrompt: buildIntroContinuation(transcript, dialogue.intro),
-    cameraMotion: 'pan_right',
+    cameraMotion: 'focus_shift',
     hpA: totalHp(axiomsA),
     hpB: totalHp(axiomsB),
     hpPercentA: 100,
@@ -159,28 +154,18 @@ export async function generateScreenplay(
         )
       : undefined
 
-    // Attack + Defense merged scene (20s max)
-    const attackPrompt = buildAttackContinuation(
-      transcript,
-      round,
-      attack,
-      roundDialogue.attack,
-    )
-    const defensePrompt = defense && roundDialogue.defense
-      ? '\n\n' + buildDefenseContinuation(
-          transcript,
-          round,
-          defense,
-          roundDialogue.defense,
-        )
-      : ''
-
+    // Attack scene
     chunks.push({
       index: chunkIndex++,
-      durationSeconds: defense && roundDialogue.defense ? 18 : 10,
+      durationSeconds: 10,
       roundNumber: round.round_number,
       sceneType: 'attack',
-      videoPrompt: attackPrompt + defensePrompt,
+      videoPrompt: buildAttackContinuation(
+        transcript,
+        round,
+        attack,
+        roundDialogue.attack,
+      ),
       cameraMotion: round.round_number % 2 === 1 ? 'dolly_left' : 'dolly_right',
       hpA,
       hpB,
@@ -194,6 +179,28 @@ export async function generateScreenplay(
         ? damagedAxiom.label
         : undefined,
     })
+
+    // Defense scene
+    if (defense && roundDialogue.defense) {
+      chunks.push({
+        index: chunkIndex++,
+        durationSeconds: 10,
+        roundNumber: round.round_number,
+        sceneType: 'defense',
+        videoPrompt: buildDefenseContinuation(
+          transcript,
+          round,
+          defense,
+          roundDialogue.defense,
+        ),
+        cameraMotion: 'focus_shift',
+        hpA,
+        hpB,
+        hpPercentA: Math.round((hpA / maxHpA) * 100),
+        hpPercentB: Math.round((hpB / maxHpB) * 100),
+        targetSide: round.attacker_side,
+      })
+    }
 
     // Commentary reaction scene
     if (roundDialogue.commentary) {
