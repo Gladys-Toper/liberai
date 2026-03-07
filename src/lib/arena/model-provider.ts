@@ -25,7 +25,7 @@ const isXAIConfigured = !!process.env.XAI_API_KEY
 // Falls back to Gemini for commentator when XAI key is not configured
 const MODEL_MAP: Record<ModelKey, LanguageModel> = {
   claude: anthropic('claude-sonnet-4-20250514'),
-  openai: openai('gpt-4o'),
+  openai: openai('gpt-5-mini'),
   gemini: google('gemini-2.5-flash'),
   grok: isXAIConfigured
     ? xai('grok-3-fast')
