@@ -156,6 +156,7 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
   const [videoEstimatedSeconds, setVideoEstimatedSeconds] = useState(0)
   const [videoDurationSeconds, setVideoDurationSeconds] = useState(0)
   const [showCinematic, setShowCinematic] = useState(false)
+  const [posterUrl, setPosterUrl] = useState<string | null>(null)
 
   const { session, bookA, bookB, axioms, rounds, arguments: args } = state
   const modelA = state.modelA || session.model_a || 'openai'
@@ -206,7 +207,7 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
     fetchBet()
   }, [session.id])
 
-  // ── Check for existing cinematic video on load ──────────────────
+  // ── Check for existing cinematic video + poster on load ──────────
   useEffect(() => {
     async function checkVideo() {
       try {
@@ -223,6 +224,14 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
           setVideoTotal(data.total || 0)
           setVideoEstimatedSeconds(data.estimatedSecondsRemaining || 0)
           setVideoDurationSeconds(data.videoDurationSeconds || 0)
+          // Also fetch poster for the wait screen
+          try {
+            const posterRes = await fetch(`/api/arena/${session.id}/poster`)
+            if (posterRes.ok) {
+              const posterData = await posterRes.json()
+              if (posterData.posterUrl) setPosterUrl(posterData.posterUrl)
+            }
+          } catch { /* poster is optional */ }
         } else if (data.status === 'failed') {
           setVideoStatus('failed')
         }
@@ -268,10 +277,23 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
     setVideoStatus('generating')
     setVideoProgress(0)
 
-    try {
-      const res = await fetch(`/api/arena/${session.id}/video`, {
-        method: 'POST',
+    // Fire video pipeline + fight poster in parallel
+    const videoPromise = fetch(`/api/arena/${session.id}/video`, { method: 'POST' })
+    const posterPromise = fetch(`/api/arena/${session.id}/poster`, { method: 'POST' })
+
+    // Handle poster (fast ~3-5s) — don't block on it
+    posterPromise
+      .then(async (res) => {
+        if (res.ok) {
+          const data = await res.json()
+          if (data.posterUrl) setPosterUrl(data.posterUrl)
+        }
       })
+      .catch(() => { /* poster is optional enhancement */ })
+
+    // Handle video pipeline
+    try {
+      const res = await videoPromise
       if (!res.ok) {
         const err = await res.json()
         console.error('Video generation failed:', err.error)
@@ -693,15 +715,134 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
         </div>
 
         {/* ═══════════════════════════════════════════════════════════════
-            LAYER 2: Winner overlay
+            LAYER 2: Winner / Fight-poster wait screen overlay
             ═══════════════════════════════════════════════════════════════ */}
         <AnimatePresence>
-          {isCompleted && winnerBook && (
+          {/* ── Full-bleed fight poster wait screen (during video gen) ── */}
+          {isCompleted && videoStatus === 'generating' && (
+            <motion.div
+              className="absolute inset-0 z-40"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.6 }}
+              key="poster-wait"
+            >
+              {/* Poster image with Ken Burns slow zoom */}
+              {posterUrl ? (
+                <motion.div
+                  className="absolute inset-0 overflow-hidden"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.8 }}
+                >
+                  <img
+                    src={posterUrl}
+                    alt="Fight Poster"
+                    className="w-full h-full object-cover"
+                    style={{
+                      animation: 'kenBurns 60s ease-in-out infinite alternate',
+                    }}
+                  />
+                  {/* Gradient vignette overlay */}
+                  <div
+                    className="absolute inset-0"
+                    style={{
+                      background: 'radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.5) 100%)',
+                    }}
+                  />
+                </motion.div>
+              ) : (
+                /* Loading state while poster generates (~3-5s) */
+                <div className="absolute inset-0 flex items-center justify-center bg-black/80">
+                  <motion.div
+                    className="text-center"
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ duration: 0.4 }}
+                  >
+                    <Loader2 className="mx-auto h-10 w-10 text-amber-400 animate-spin mb-4" />
+                    <p className="text-lg font-black text-amber-400 uppercase tracking-wider">Preparing the Arena</p>
+                    <p className="text-sm text-zinc-500 mt-1">Generating fight poster…</p>
+                  </motion.div>
+                </div>
+              )}
+
+              {/* ── Bottom progress bar overlay ── */}
+              <div
+                className="absolute bottom-0 left-0 right-0 z-50 px-6 py-4"
+                style={{
+                  background: 'linear-gradient(0deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.4) 70%, transparent 100%)',
+                }}
+              >
+                <div className="max-w-2xl mx-auto">
+                  <div className="flex items-center gap-3 mb-2">
+                    <Loader2 className="w-4 h-4 text-amber-400 animate-spin shrink-0" />
+                    <span className="text-sm font-bold text-amber-400">
+                      Rendering {videoDurationSeconds > 0 ? `${Math.round(videoDurationSeconds / 60)} min` : ''} cinematic replay…
+                    </span>
+                    <span className="text-[11px] text-zinc-500 ml-auto">
+                      {videoEstimatedSeconds > 60
+                        ? `~${Math.ceil(videoEstimatedSeconds / 60)} min remaining`
+                        : videoEstimatedSeconds > 0
+                          ? `~${videoEstimatedSeconds}s remaining`
+                          : 'Starting pipeline…'}
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-amber-950/60 overflow-hidden">
+                    <motion.div
+                      className="h-full rounded-full bg-gradient-to-r from-amber-600 to-amber-400"
+                      animate={{ width: `${videoTotal > 0 ? (videoProgress / videoTotal) * 100 : 5}%` }}
+                      transition={{ type: 'spring', stiffness: 60, damping: 20 }}
+                    />
+                  </div>
+                  {videoTotal > 0 && (
+                    <p className="text-[10px] text-zinc-600 mt-1">
+                      {videoProgress}/{videoTotal} chunks rendered
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* ── BettingPanel floating card (bottom-right on desktop, below on mobile) ── */}
+              <motion.div
+                className="absolute z-50 right-4 bottom-24 w-[280px] hidden lg:block"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.5, duration: 0.5 }}
+              >
+                <div
+                  className="rounded-xl p-3"
+                  style={{
+                    background: 'rgba(10,8,5,0.92)',
+                    backdropFilter: 'blur(20px)',
+                    border: '1px solid rgba(180,140,50,0.2)',
+                    boxShadow: '0 8px 40px rgba(0,0,0,0.6)',
+                  }}
+                >
+                  <p className="text-[9px] font-black uppercase tracking-[0.2em] text-amber-500/60 mb-2">Place Your Bets</p>
+                  <BettingPanel
+                    sessionId={session.id}
+                    pool={state.pool || null}
+                    bookATitle={bookA.title}
+                    bookBTitle={bookB.title}
+                    walletBalance={walletBalance}
+                    userBet={userBet}
+                    onPlaceBet={handlePlaceBet}
+                  />
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+
+          {/* ── Standard winner overlay (non-generating states) ── */}
+          {isCompleted && winnerBook && videoStatus !== 'generating' && (
             <motion.div
               className="absolute inset-0 z-40 flex items-center justify-center"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               style={{ background: 'rgba(0,0,0,0.6)' }}
+              key="winner-overlay"
             >
               <motion.div
                 className="text-center"
@@ -709,25 +850,10 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
                 animate={{ scale: 1, opacity: 1 }}
                 transition={{ type: 'spring', stiffness: 100, damping: 15, delay: 0.3 }}
               >
-                {/* Show winner only when NOT generating video (avoid spoilers) */}
-                {videoStatus !== 'generating' && (
-                  <>
-                    <Trophy className="mx-auto h-16 w-16 text-amber-400 mb-4" />
-                    <p className="text-4xl font-black text-amber-400 uppercase tracking-wider">{winnerBook.title}</p>
-                    <p className="text-xl text-amber-300/60 uppercase tracking-[0.3em] mt-2">Wins</p>
-                    <p className="text-sm text-zinc-500 mt-3">Victory by {session.win_condition}</p>
-                  </>
-                )}
-
-                {/* Show matchup during video generation (no spoilers!) */}
-                {videoStatus === 'generating' && (
-                  <>
-                    <Film className="mx-auto h-12 w-12 text-amber-400 mb-4" />
-                    <p className="text-2xl font-black text-red-400 uppercase tracking-wider">{bookA.title}</p>
-                    <p className="text-lg text-zinc-500 font-bold my-1">vs</p>
-                    <p className="text-2xl font-black text-blue-400 uppercase tracking-wider">{bookB.title}</p>
-                  </>
-                )}
+                <Trophy className="mx-auto h-16 w-16 text-amber-400 mb-4" />
+                <p className="text-4xl font-black text-amber-400 uppercase tracking-wider">{winnerBook.title}</p>
+                <p className="text-xl text-amber-300/60 uppercase tracking-[0.3em] mt-2">Wins</p>
+                <p className="text-sm text-zinc-500 mt-3">Victory by {session.win_condition}</p>
 
                 {/* ── Cinematic Replay Buttons ── */}
                 <div className="mt-6 flex items-center justify-center gap-3">
@@ -739,27 +865,6 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
                       <Film className="inline-block w-4 h-4 mr-2 -mt-0.5" />
                       Watch Cinematic Replay
                     </button>
-                  ) : videoStatus === 'generating' ? (
-                    <div className="px-5 py-2.5 rounded-lg border border-amber-600/30 bg-black/60 backdrop-blur-sm min-w-[280px]">
-                      <Loader2 className="inline-block w-4 h-4 mr-2 -mt-0.5 animate-spin text-amber-400" />
-                      <span className="text-sm font-bold text-amber-400">
-                        Rendering {videoDurationSeconds > 0 ? `${Math.round(videoDurationSeconds / 60)} min` : ''} cinematic replay…
-                      </span>
-                      <div className="mt-2 h-1.5 rounded-full bg-amber-950/50 overflow-hidden">
-                        <motion.div
-                          className="h-full rounded-full bg-amber-500"
-                          animate={{ width: `${videoTotal > 0 ? (videoProgress / videoTotal) * 100 : 5}%` }}
-                          transition={{ type: 'spring', stiffness: 60, damping: 20 }}
-                        />
-                      </div>
-                      <p className="text-[11px] text-zinc-500 mt-1.5">
-                        {videoEstimatedSeconds > 60
-                          ? `~${Math.ceil(videoEstimatedSeconds / 60)} min remaining`
-                          : videoEstimatedSeconds > 0
-                            ? `~${videoEstimatedSeconds}s remaining`
-                            : 'Starting pipeline…'}
-                      </p>
-                    </div>
                   ) : videoStatus === 'failed' ? (
                     <button
                       onClick={generateCinematicVideo}
@@ -782,6 +887,16 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* Ken Burns CSS keyframe animation (global style for poster zoom) */}
+        {videoStatus === 'generating' && posterUrl && (
+          <style dangerouslySetInnerHTML={{ __html: `
+            @keyframes kenBurns {
+              0% { transform: scale(1) translate(0, 0); }
+              100% { transform: scale(1.08) translate(-1%, -1%); }
+            }
+          `}} />
+        )}
 
         {/* ═══════════════════════════════════════════════════════════════
             LAYER 4: Bottom — Controls + Commentary Lower-Third + Chyron
@@ -998,10 +1113,8 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
                 Watch Replay
               </button>
             ) : videoStatus === 'generating' ? (
-              <div className="px-4 py-2 rounded-lg border border-amber-600/30 bg-black/70 backdrop-blur-sm text-xs text-amber-400 font-bold">
-                <Loader2 className="inline-block w-3.5 h-3.5 mr-1.5 -mt-0.5 animate-spin" />
-                Rendering replay… {videoEstimatedSeconds > 60 ? `~${Math.ceil(videoEstimatedSeconds / 60)} min left` : videoEstimatedSeconds > 0 ? `~${videoEstimatedSeconds}s left` : ''}
-              </div>
+              /* Progress handled by the full-bleed poster wait screen above */
+              null
             ) : videoStatus === 'failed' ? (
               <button
                 onClick={generateCinematicVideo}

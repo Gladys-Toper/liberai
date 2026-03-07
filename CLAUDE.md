@@ -36,6 +36,7 @@ npx supabase db push               # Apply migrations to remote
 | Commentator       | xAI Grok    | `grok-4.1-fast`                | Off-color, witty, edgy sports-style    |
 | Lightweight/Chat  | Google      | `gemini-3.1-flash`             | Fast, cheap tasks (NOT for judging)    |
 | Reader Chat       | Anthropic   | `claude-sonnet-4-20250514`     | Book Q&A for readers                   |
+| Fight Poster      | Google      | `gemini-3.1-flash-image-preview` | Nano Banana 2 — fast image gen (~3s) |
 | Grok fallback     | Google      | `gemini-3.1-flash`             | When XAI_API_KEY not configured        |
 
 **When updating models**: Change ONLY `model-provider.ts` and `pricing.ts`. Run `bash scripts/check-models.sh` to verify no deprecated references remain.
@@ -44,6 +45,9 @@ npx supabase db push               # Apply migrations to remote
 - `gemini-2.5-flash`, `gemini-2.0-flash`, `gemini-1.5-flash` — replaced by `gemini-3.1-flash`
 - `gpt-4o-mini`, `gpt-4o`, `gpt-4` — replaced by `gpt-5.3`
 - `grok-3-fast`, `grok-2` — replaced by `grok-4.1-fast`
+
+### Fight Poster — Nano Banana 2
+The fight poster generator (`src/app/api/arena/[id]/poster/route.ts`) uses **Nano Banana 2** (`gemini-3.1-flash-image-preview`) via `generateImage()` from Vercel AI SDK. Generates 1960s boxing-style promotional art during the video wait screen. Uses `personGeneration: 'allow_adult'` for illustrated author figures. **NOT a debate pipeline model** — used only for image generation.
 
 ### Screenplay Generator — Gemini 3.1 Pro
 The screenplay generator (`src/lib/arena/screenplay-generator.ts`) uses **Gemini 3.1 Pro** (role: `screenplay`) to write ALL dialogue in one coherent pass — debaters, commentator, and referee voices. Minimum quality floor: `gemini-3.1-pro` or `grok-4.2+`. **NEVER use Flash or cheaper models for screenplay.**
@@ -88,6 +92,7 @@ src/
 ```
 api/
 ├── arena/[id]/video/   # Self-chaining cinematic video pipeline
+├── arena/[id]/poster/  # 1960s fight poster via Nano Banana 2
 ├── a2a/                # Agent-to-Agent JSON-RPC (tasks, swarms, discovery)
 ├── chat/               # Reader book Q&A (multi-model)
 ├── author-chat/        # Author dashboard AI assistant
@@ -119,6 +124,7 @@ api/
 - `src/app/api/arena/[id]/video/route.ts` — Self-chaining video pipeline
 - `src/components/arena/DebateArenaClient.tsx` — Main arena UI
 - `src/components/arena/CinematicPlayer.tsx` — Video player with timeline overlays
+- `src/app/api/arena/[id]/poster/route.ts` — Fight poster generator (Nano Banana 2)
 - `src/lib/payments/pricing.ts` — Per-token pricing (keep in sync with model-provider.ts)
 
 ## Gotchas
@@ -145,4 +151,4 @@ api/
 ## Supabase
 - Project ID: `zsevmbfgdtoojzgxyxqf`
 - Storage bucket: `debate-video` (public read)
-- Migrations: `supabase/migrations/` (numbered 001–010+)
+- Migrations: `supabase/migrations/` (numbered 001–012+)
