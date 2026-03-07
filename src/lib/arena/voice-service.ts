@@ -15,16 +15,27 @@ export interface IVoiceService {
  * Voice Design API creates custom voices: Scottish male (Smith), German male (Marx)
  */
 export class ElevenLabsAdapter implements IVoiceService {
-  private client: ElevenLabsClient
+  private client: ElevenLabsClient | null = null
+  private apiKey?: string
 
   constructor(apiKey?: string) {
-    this.client = new ElevenLabsClient({
-      apiKey: apiKey || process.env.ELEVENLABS_API_KEY!,
-    })
+    // Lazy init — don't create the client until streamAudio() is called.
+    // This prevents the SDK from throwing during module load when
+    // ELEVENLABS_API_KEY is not yet set (e.g. during Next.js build).
+    this.apiKey = apiKey
+  }
+
+  private getClient(): ElevenLabsClient {
+    if (!this.client) {
+      this.client = new ElevenLabsClient({
+        apiKey: this.apiKey || process.env.ELEVENLABS_API_KEY!,
+      })
+    }
+    return this.client
   }
 
   async streamAudio(text: string, voiceProfileId: string): Promise<ArrayBuffer> {
-    const audioStream = await this.client.textToSpeech.convert(voiceProfileId, {
+    const audioStream = await this.getClient().textToSpeech.convert(voiceProfileId, {
       text,
       modelId: 'eleven_v3',
       outputFormat: 'pcm_16000', // PCM 16-bit 16kHz — required by Simli
@@ -41,16 +52,25 @@ export class ElevenLabsAdapter implements IVoiceService {
  * Supports emotion tags from Grok output: <laugh>, <shout>, etc.
  */
 export class CartesiaAdapter implements IVoiceService {
-  private client: Cartesia
+  private client: Cartesia | null = null
+  private apiKey?: string
 
   constructor(apiKey?: string) {
-    this.client = new Cartesia({
-      apiKey: apiKey || process.env.CARTESIA_API_KEY!,
-    })
+    // Lazy init — same pattern as ElevenLabsAdapter
+    this.apiKey = apiKey
+  }
+
+  private getClient(): Cartesia {
+    if (!this.client) {
+      this.client = new Cartesia({
+        apiKey: this.apiKey || process.env.CARTESIA_API_KEY!,
+      })
+    }
+    return this.client
   }
 
   async streamAudio(text: string, voiceProfileId: string): Promise<ArrayBuffer> {
-    const response = await this.client.tts.generate({
+    const response = await this.getClient().tts.generate({
       model_id: 'sonic-3',
       transcript: text,
       voice: { id: voiceProfileId, mode: 'id' as const },
