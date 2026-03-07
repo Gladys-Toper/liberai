@@ -1,8 +1,10 @@
 // Per-token pricing in USD per 1M tokens
 export const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  claude: { input: 3.00, output: 15.00 },    // Claude Sonnet 4
-  gpt: { input: 0.15, output: 0.60 },         // GPT-4o-mini
-  gemini: { input: 0.15, output: 0.60 },       // Gemini 2.5 Flash
+  claude: { input: 3.00, output: 15.00 },    // Claude Sonnet 4.6
+  openai: { input: 0.15, output: 0.60 },     // GPT-5.3 Instant
+  gpt: { input: 0.15, output: 0.60 },         // GPT-5.3 Instant (alias)
+  gemini: { input: 1.25, output: 10.00 },     // Gemini 3.1 Pro Preview
+  grok: { input: 0.20, output: 0.50 },        // Grok 4.1 Fast (non-reasoning)
 }
 
 // Storage: Supabase Storage pricing

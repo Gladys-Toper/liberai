@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { BookOpen, Search, Menu, X, ChevronDown, LogOut, User, LayoutDashboard, Shield, Rss } from 'lucide-react'
+import { BookOpen, Search, Menu, X, ChevronDown, LogOut, User, LayoutDashboard, Shield, Swords } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Avatar } from '@/components/ui/avatar'
@@ -62,6 +62,7 @@ export function Header() {
   const baseLinks = [
     { href: '/marketplace', label: 'Explore' },
     { href: '/library', label: 'Library' },
+    { href: '/arena', label: 'Arena' },
   ]
 
   const navLinks = user
