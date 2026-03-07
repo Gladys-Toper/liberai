@@ -10,6 +10,10 @@ interface CommentatorBoothProps {
   iceServers?: RTCIceServer[]
   offer?: RTCSessionDescriptionInit
   latestCommentary?: string | null
+  /** 'fixed' = legacy floating PiP, 'inline' = embedded in layout */
+  position?: 'fixed' | 'inline'
+  /** Compact mode for small inline windows */
+  compact?: boolean
 }
 
 export function CommentatorBooth({
@@ -17,9 +21,53 @@ export function CommentatorBooth({
   iceServers,
   offer,
   latestCommentary,
+  position = 'fixed',
+  compact = false,
 }: CommentatorBoothProps) {
   const [minimized, setMinimized] = useState(false)
 
+  // ── Inline (Oxford Union corner PiP) ──
+  if (position === 'inline') {
+    return (
+      <div
+        className="rounded-lg border overflow-hidden"
+        style={{
+          background: 'rgba(10,10,10,0.95)',
+          border: '1px solid rgba(212,160,23,0.3)',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.6), 0 0 8px rgba(212,160,23,0.08)',
+          backdropFilter: 'blur(8px)',
+        }}
+      >
+        {/* Label bar */}
+        <div
+          className="px-2 py-1 flex items-center gap-1.5"
+          style={{
+            background: 'linear-gradient(90deg, rgba(212,160,23,0.1), transparent)',
+            borderBottom: '1px solid rgba(212,160,23,0.15)',
+          }}
+        >
+          <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+          <span className="text-[8px] font-black uppercase tracking-[0.2em] text-amber-500/70">
+            Commentator
+          </span>
+        </div>
+
+        {/* Avatar */}
+        <div className={compact ? 'p-1' : 'p-1.5'}>
+          <AvatarVideo
+            sessionId={sessionId || null}
+            iceServers={iceServers}
+            offer={offer}
+            side="a"
+            fallbackLabel="Grok"
+            isActive
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // ── Fixed (legacy floating PiP) ──
   return (
     <AnimatePresence>
       <motion.div
@@ -89,8 +137,8 @@ export function CommentatorBooth({
                   sessionId={sessionId || null}
                   iceServers={iceServers}
                   offer={offer}
-                  side="a" // reuse component, doesn't affect commentator styling
-                  fallbackLabel="C"
+                  side="a"
+                  fallbackLabel="Grok"
                   isActive
                 />
               </div>

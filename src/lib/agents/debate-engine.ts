@@ -9,6 +9,9 @@ import {
   DefaultArenaModelProvider,
   type ArenaModelProvider,
 } from '@/lib/arena/model-provider'
+import { ElevenLabsAdapter, CartesiaAdapter, type IVoiceService } from '@/lib/arena/voice-service'
+import { SimliAdapter } from '@/lib/arena/avatar-service'
+import { AV_PROFILES, isAVConfigured } from '@/lib/arena/av-config'
 import {
   buildAxiomExtractionPrompt,
   buildCombatantPrompt,
@@ -18,6 +21,48 @@ import {
   type AxiomInfo,
   type ChunkContext,
 } from './debate-prompts'
+
+// ============================================================================
+// AV Pipeline — Text → TTS → Simli lip-sync (best-effort, non-blocking)
+// ============================================================================
+
+const elevenlabs = new ElevenLabsAdapter()
+const cartesia = new CartesiaAdapter()
+const simli = new SimliAdapter()
+
+/**
+ * Pipe spoken text through TTS → Simli avatar lip-sync.
+ * This is best-effort: if AV is not configured or fails, we log and continue.
+ * The debate text still gets stored in DB regardless.
+ *
+ * @param text - The spoken text to synthesize
+ * @param role - 'debater_a' | 'debater_b' | 'commentator'
+ * @param avSessionId - The active Simli WebRTC session ID for this role
+ */
+async function pipeAVForRole(
+  text: string,
+  role: 'debater_a' | 'debater_b' | 'commentator',
+  avSessionId: string | null,
+): Promise<void> {
+  if (!avSessionId || !isAVConfigured()) return
+
+  try {
+    const profile = AV_PROFILES[role]
+    if (!profile?.voiceId) return
+
+    // Select TTS provider based on role config
+    const tts: IVoiceService = profile.ttsProvider === 'cartesia' ? cartesia : elevenlabs
+
+    // Step 1: Text → Audio (PCM 16-bit 16kHz)
+    const audioBuffer = await tts.streamAudio(text, profile.voiceId)
+
+    // Step 2: Audio → Simli lip-sync (piped to WebRTC session, auto-streams to browser)
+    await simli.pipeAudioToAvatar(audioBuffer, avSessionId)
+  } catch (err) {
+    // AV is best-effort — log but don't crash the debate
+    console.error(`[AV] Failed to pipe audio for ${role}:`, err)
+  }
+}
 
 // ============================================================================
 // Types
@@ -387,8 +432,20 @@ async function extractAxioms(
 // Execute Round
 // ============================================================================
 
+/**
+ * AV session IDs for live avatar streaming.
+ * Pass from the frontend when WebRTC sessions are active.
+ * If null/undefined, debate runs text-only (no TTS/lip-sync).
+ */
+export interface AVSessionIds {
+  debaterA: string | null
+  debaterB: string | null
+  commentator: string | null
+}
+
 export async function executeRound(
   sessionId: string,
+  avSessions?: AVSessionIds | null,
 ): Promise<DebateRound> {
   const db = getServiceClient()
 
@@ -510,6 +567,12 @@ export async function executeRound(
     source_quotes: string[]
   }>(attackText)
 
+  // AV Pipeline: Pipe attack speech to avatar (non-blocking best-effort)
+  const attackAvRole = attackerSide === 'a' ? 'debater_a' : 'debater_b' as const
+  const attackAvSession = avSessions?.[attackerSide === 'a' ? 'debaterA' : 'debaterB'] ?? null
+  // Use claim as the spoken text — it's the distilled argument
+  pipeAVForRole(attackPayload.claim, attackAvRole, attackAvSession).catch(() => {})
+
   // Insert attack argument
   await db.from('debate_arguments').insert({
     round_id: round.id,
@@ -565,6 +628,11 @@ export async function executeRound(
     source_chunk_ids: string[]
     source_quotes: string[]
   }>(defenseText)
+
+  // AV Pipeline: Pipe defense speech to avatar (non-blocking best-effort)
+  const defenseAvRole = defenderSide === 'a' ? 'debater_a' : 'debater_b' as const
+  const defenseAvSession = avSessions?.[defenderSide === 'a' ? 'debaterA' : 'debaterB'] ?? null
+  pipeAVForRole(defensePayload.claim, defenseAvRole, defenseAvSession).catch(() => {})
 
   // Insert defense argument
   await db.from('debate_arguments').insert({
@@ -701,6 +769,9 @@ export async function executeRound(
     prompt: commentaryPrompt,
     temperature: 0.8,
   })
+
+  // AV Pipeline: Pipe commentary to commentator avatar (non-blocking best-effort)
+  pipeAVForRole(commentary.trim(), 'commentator', avSessions?.commentator ?? null).catch(() => {})
 
   // ---- STEP 6: Finalize round ----
   await db
