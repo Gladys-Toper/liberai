@@ -32,7 +32,7 @@ Revenue: ${JSON.stringify(revenue)}
 P&L: ${JSON.stringify(pnl.totals)}`
 
   const { text } = await generateText({
-    model: google('gemini-3.1-flash'),
+    model: google('gemini-3-flash-preview'),
     system: `You are an AI assistant for an author on LiberAi, a book publishing platform. Answer questions using the provided data. Be concise and data-driven.\n\n${context}`,
     prompt: message,
   })

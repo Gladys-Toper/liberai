@@ -10,12 +10,18 @@
 # the canonical versions defined in src/lib/arena/model-provider.ts.
 # If a deprecated or unknown model string is found, it fails loudly.
 #
-# CANONICAL MODELS (update these when upgrading):
-#   GPT:    gpt-5.3
-#   Gemini: gemini-3.1-pro  (debate judge/referee/synthesizer)
-#   Gemini: gemini-3.1-flash (lightweight tasks, fallback)
-#   Grok:   grok-4.1-fast   (commentator)
+# CANONICAL MODELS (verified against live APIs 2026-03-07):
+#   GPT:    gpt-5.4
+#   Gemini: gemini-3.1-pro-preview     (debate judge/referee/synthesizer/screenplay)
+#   Gemini: gemini-3-flash-preview     (lightweight tasks, fallback)
+#   Gemini: gemini-3.1-flash-image-preview (Nano Banana 2, fight poster)
+#   Grok:   grok-4-1-fast-non-reasoning (commentator)
 #   Claude: claude-sonnet-4-20250514
+#
+# ⚠️  DO NOT GUESS MODEL IDs. Query live APIs to verify:
+#   curl api.openai.com/v1/models
+#   curl generativelanguage.googleapis.com/v1beta/models
+#   curl api.x.ai/v1/models
 # ═══════════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -32,8 +38,9 @@ echo "🔍 Scanning for deprecated model references..."
 echo ""
 
 # ── Deprecated Google models ──────────────────────────────────────────────
+# Flag anything older than gemini-3.x (i.e. gemini-2.x, gemini-1.x)
 DEPRECATED_GEMINI=$(grep -rn --include='*.ts' --include='*.tsx' \
-  -E "google\(['\"]gemini-(2\.|1\.5|2\.0|2\.5)" "$SRC_DIR" 2>/dev/null || true)
+  -E "google\(['\"]gemini-(1\.|2\.)" "$SRC_DIR" 2>/dev/null || true)
 
 if [ -n "$DEPRECATED_GEMINI" ]; then
   echo -e "${RED}✗ DEPRECATED Gemini models found:${NC}"
@@ -41,14 +48,15 @@ if [ -n "$DEPRECATED_GEMINI" ]; then
     echo "  $line"
   done
   echo ""
-  echo -e "  ${YELLOW}Fix: Use google('gemini-3.1-pro') for debate/judge or google('gemini-3.1-flash') for lightweight tasks${NC}"
+  echo -e "  ${YELLOW}Fix: Use google('gemini-3.1-pro-preview') for debate/judge or google('gemini-3-flash-preview') for lightweight tasks${NC}"
   echo ""
   ERRORS=$((ERRORS + 1))
 fi
 
 # ── Deprecated OpenAI models ─────────────────────────────────────────────
+# Flag anything older than gpt-5.4 (i.e. gpt-4.x, gpt-5.0–5.3, gpt-3.x)
 DEPRECATED_OPENAI=$(grep -rn --include='*.ts' --include='*.tsx' \
-  -E "openai\(['\"]gpt-(4o|4|3\.5|5\.[0-2]|5\.[4-9])" "$SRC_DIR" 2>/dev/null || true)
+  -E "openai\(['\"]gpt-(3|4|5\.[0-3])" "$SRC_DIR" 2>/dev/null || true)
 
 if [ -n "$DEPRECATED_OPENAI" ]; then
   echo -e "${RED}✗ DEPRECATED OpenAI models found:${NC}"
@@ -56,14 +64,15 @@ if [ -n "$DEPRECATED_OPENAI" ]; then
     echo "  $line"
   done
   echo ""
-  echo -e "  ${YELLOW}Fix: Use openai('gpt-5.3') — the canonical debater model${NC}"
+  echo -e "  ${YELLOW}Fix: Use openai('gpt-5.4') — the canonical debater model${NC}"
   echo ""
   ERRORS=$((ERRORS + 1))
 fi
 
 # ── Deprecated xAI models ────────────────────────────────────────────────
+# Flag anything older than grok-4-1 (i.e. grok-2, grok-3, grok-4-0, grok-4.1-fast [wrong format])
 DEPRECATED_GROK=$(grep -rn --include='*.ts' --include='*.tsx' \
-  -E "xai\(['\"]grok-(2|3|4\.0)" "$SRC_DIR" 2>/dev/null || true)
+  -E "xai\(['\"]grok-(2|3[^.]|4-0|4\.)" "$SRC_DIR" 2>/dev/null || true)
 
 if [ -n "$DEPRECATED_GROK" ]; then
   echo -e "${RED}✗ DEPRECATED Grok models found:${NC}"
@@ -71,7 +80,7 @@ if [ -n "$DEPRECATED_GROK" ]; then
     echo "  $line"
   done
   echo ""
-  echo -e "  ${YELLOW}Fix: Use xai('grok-4.1-fast') — the canonical commentator model${NC}"
+  echo -e "  ${YELLOW}Fix: Use xai('grok-4-1-fast-non-reasoning') — the canonical commentator model${NC}"
   echo ""
   ERRORS=$((ERRORS + 1))
 fi
@@ -108,10 +117,11 @@ if [ "$ERRORS" -gt 0 ]; then
   echo -e "${RED}✗ Found $ERRORS deprecated model reference(s). Fix before committing.${NC}"
   echo ""
   echo "  Canonical models (src/lib/arena/model-provider.ts):"
-  echo "    Debaters:     openai('gpt-5.3')"
-  echo "    Judge:        google('gemini-3.1-pro')"
-  echo "    Commentator:  xai('grok-4.1-fast')"
-  echo "    Lightweight:  google('gemini-3.1-flash')"
+  echo "    Debaters:     openai('gpt-5.4')"
+  echo "    Judge:        google('gemini-3.1-pro-preview')"
+  echo "    Commentator:  xai('grok-4-1-fast-non-reasoning')"
+  echo "    Lightweight:  google('gemini-3-flash-preview')"
+  echo "    Poster:       google.image('gemini-3.1-flash-image-preview')"
   echo "    Reader chat:  anthropic('claude-sonnet-4-20250514')"
   exit 1
 else

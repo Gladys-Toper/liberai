@@ -26,31 +26,44 @@ npx supabase db push               # Apply migrations to remote
 ### AI Model Assignments — SINGLE SOURCE OF TRUTH
 **NEVER hardcode model IDs.** All model assignments flow from `src/lib/arena/model-provider.ts`.
 
-| Role              | Provider    | Model ID                       | Why                                    |
-|-------------------|-------------|--------------------------------|----------------------------------------|
-| Debaters (A & B)  | OpenAI      | `gpt-5.3`                     | Best at structured argumentation       |
-| Axiom Extractor   | OpenAI      | `gpt-5.3`                     | Same model as debaters for consistency |
-| Referee / Judge   | Google      | `gemini-3.1-pro`               | Best at impartial multi-criteria eval  |
-| Synthesizer       | Google      | `gemini-3.1-pro`               | Same model as judge for consistency    |
-| Screenplay        | Google      | `gemini-3.1-pro`               | Cinematic dialogue (min: 3.1-pro/grok-4.2+) |
-| Commentator       | xAI Grok    | `grok-4.1-fast`                | Off-color, witty, edgy sports-style    |
-| Lightweight/Chat  | Google      | `gemini-3.1-flash`             | Fast, cheap tasks (NOT for judging)    |
-| Reader Chat       | Anthropic   | `claude-sonnet-4-20250514`     | Book Q&A for readers                   |
-| Fight Poster      | Google      | `gemini-3.1-flash-image-preview` | Nano Banana 2 — fast image gen (~3s) |
-| Grok fallback     | Google      | `gemini-3.1-flash`             | When XAI_API_KEY not configured        |
+**⚠️ CRITICAL: DO NOT GUESS MODEL IDs FROM MEMORY — THEY WILL BE WRONG.**
+Always verify model IDs against the live APIs before changing:
+```bash
+# OpenAI models (sorted newest first):
+curl -s https://api.openai.com/v1/models -H "Authorization: Bearer $OPENAI_API_KEY" | python3 -c "import sys,json; [print(m['id']) for m in sorted(json.load(sys.stdin)['data'], key=lambda m: m['created'], reverse=True)[:15]]"
+# Google Gemini models:
+curl -s "https://generativelanguage.googleapis.com/v1beta/models?key=$GOOGLE_GENERATIVE_AI_API_KEY" | python3 -c "import sys,json; [print(m['name'].replace('models/',''), '-', m.get('displayName','')) for m in json.load(sys.stdin)['models'] if 'gemini' in m['name']]"
+# xAI Grok models:
+curl -s https://api.x.ai/v1/models -H "Authorization: Bearer $XAI_API_KEY" | python3 -c "import sys,json; [print(m['id']) for m in sorted(json.load(sys.stdin)['data'], key=lambda m: m['created'], reverse=True)]"
+```
 
-**When updating models**: Change ONLY `model-provider.ts` and `pricing.ts`. Run `bash scripts/check-models.sh` to verify no deprecated references remain.
+| Role              | Provider    | Model ID                            | Why                                    |
+|-------------------|-------------|-------------------------------------|----------------------------------------|
+| Debaters (A & B)  | OpenAI      | `gpt-5.4`                          | Latest OpenAI (March 2026)             |
+| Axiom Extractor   | OpenAI      | `gpt-5.4`                          | Same model as debaters for consistency |
+| Referee / Judge   | Google      | `gemini-3.1-pro-preview`            | Latest Gemini Pro                      |
+| Synthesizer       | Google      | `gemini-3.1-pro-preview`            | Same model as judge for consistency    |
+| Screenplay        | Google      | `gemini-3.1-pro-preview`            | Cinematic dialogue                     |
+| Commentator       | xAI Grok    | `grok-4-1-fast-non-reasoning`       | Off-color, witty, edgy sports-style    |
+| Lightweight/Chat  | Google      | `gemini-3-flash-preview`            | Fast, cheap tasks (NOT for judging)    |
+| Reader Chat       | Anthropic   | `claude-sonnet-4-20250514`          | Book Q&A for readers                   |
+| Fight Poster      | Google      | `gemini-3.1-flash-image-preview`    | Nano Banana 2 — fast image gen (~3s)   |
+| Grok fallback     | Google      | `gemini-3-flash-preview`            | When XAI_API_KEY not configured        |
+
+*Last verified against live APIs: 2026-03-07*
+
+**When updating models**: Change ONLY `model-provider.ts` and `pricing.ts`. Run the API queries above to get real model IDs. Run `bash scripts/check-models.sh` to verify no deprecated references remain.
 
 **DEPRECATED models — NEVER use these:**
-- `gemini-2.5-flash`, `gemini-2.0-flash`, `gemini-1.5-flash` — replaced by `gemini-3.1-flash`
-- `gpt-4o-mini`, `gpt-4o`, `gpt-4` — replaced by `gpt-5.3`
-- `grok-3-fast`, `grok-2` — replaced by `grok-4.1-fast`
+- `gpt-5.3`, `gpt-4o-mini`, `gpt-4o`, `gpt-4`, `gpt-4.1` — replaced by `gpt-5.4`
+- `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash`, `gemini-1.5-flash` — replaced by `gemini-3.1-pro-preview` / `gemini-3-flash-preview`
+- `grok-4.1-fast`, `grok-3-fast`, `grok-2` — replaced by `grok-4-1-fast-non-reasoning`
 
 ### Fight Poster — Nano Banana 2
 The fight poster generator (`src/app/api/arena/[id]/poster/route.ts`) uses **Nano Banana 2** (`gemini-3.1-flash-image-preview`) via `generateImage()` from Vercel AI SDK. Generates 1960s boxing-style promotional art during the video wait screen. Uses `personGeneration: 'allow_adult'` for illustrated author figures. **NOT a debate pipeline model** — used only for image generation.
 
-### Screenplay Generator — Gemini 3.1 Pro
-The screenplay generator (`src/lib/arena/screenplay-generator.ts`) uses **Gemini 3.1 Pro** (role: `screenplay`) to write ALL dialogue in one coherent pass — debaters, commentator, and referee voices. Minimum quality floor: `gemini-3.1-pro` or `grok-4.2+`. **NEVER use Flash or cheaper models for screenplay.**
+### Screenplay Generator — Gemini 3.1 Pro Preview
+The screenplay generator (`src/lib/arena/screenplay-generator.ts`) uses **Gemini 3.1 Pro Preview** (`gemini-3.1-pro-preview`, role: `screenplay`) to write ALL dialogue in one coherent pass — debaters, commentator, and referee voices. **NEVER use Flash or cheaper models for screenplay.**
 
 LTX 2.3 handles all voice synthesis from the quoted dialogue.
 
@@ -134,7 +147,8 @@ api/
 - **Git paths with brackets**: Quote paths like `"src/app/api/arena/[id]/video/route.ts"` in git commands
 - **Supabase service client**: Use `SUPABASE_SERVICE_ROLE_KEY` for server-side DB access, never expose to client
 - **Model drift**: AI sessions may hallucinate older model versions. Always check `model-provider.ts` and run `scripts/check-models.sh`
-- **XAI fallback**: If `XAI_API_KEY` is not set, Grok roles fall back to Gemini 3.1 Flash automatically
+- **XAI fallback**: If `XAI_API_KEY` is not set, Grok roles fall back to Gemini 3 Flash Preview automatically
+- **Model name drift**: AI sessions WILL hallucinate model IDs. **NEVER trust model names from memory.** Always query the live APIs (see commands in Critical Rules) to get real model IDs before changing `model-provider.ts`
 
 ## Environment Variables
 - `LTX_API_KEY` — LTX Video API key

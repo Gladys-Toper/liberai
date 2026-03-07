@@ -161,7 +161,7 @@ async function handleTaskSend(
 
   try {
     const { text } = await generateText({
-      model: google('gemini-3.1-flash'),
+      model: google('gemini-3-flash-preview'),
       system: `You are LiberAi's A2A agent assistant. You help other agents interact with the LiberAi platform.
 Scope: ${ctx.scope}. Agent: ${ctx.keyName}.
 Respond concisely with structured data when possible.`,
