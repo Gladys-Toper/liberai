@@ -21,14 +21,15 @@ export type DebateRole =
 const isXAIConfigured = !!process.env.XAI_API_KEY
 
 // Concrete model instances via Vercel AI SDK
+// Uses production-verified model IDs from the chat route
 // Falls back to Gemini for commentator when XAI key is not configured
 const MODEL_MAP: Record<ModelKey, LanguageModel> = {
-  claude: anthropic('claude-sonnet-4-6'),
-  openai: openai('gpt-5.3-instant'),
-  gemini: google('gemini-3.1-pro-preview'),
+  claude: anthropic('claude-sonnet-4-20250514'),
+  openai: openai('gpt-4o'),
+  gemini: google('gemini-2.5-flash'),
   grok: isXAIConfigured
-    ? xai('grok-4-1-fast-non-reasoning')
-    : google('gemini-3.1-pro-preview'), // Fallback when XAI not configured
+    ? xai('grok-3-fast')
+    : google('gemini-2.5-flash'), // Fallback when XAI not configured
 }
 
 export interface ArenaModelProvider {
