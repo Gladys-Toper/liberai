@@ -80,7 +80,7 @@ export interface SceneChunk {
   index: number
   durationSeconds: number
   roundNumber: number
-  sceneType: 'attack' | 'defense' | 'commentary' | 'verdict' | 'intro' | 'outro'
+  sceneType: 'establishing' | 'intro' | 'attack' | 'defense' | 'commentary' | 'verdict'
   videoPrompt: string
   cameraMotion?: string
 
@@ -105,30 +105,39 @@ export interface SceneChunk {
 /**
  * Convert an array of SceneChunks into timestamped timeline events.
  *
- * Timestamps are deterministic: chunk N starts at N * chunkDuration.
- * Events within a chunk are placed at fixed offsets:
- *   +0s   round_start (attack/intro scenes)
- *   +2s   defense (defense scenes)
- *   +8s   attack damage lands
- *   +9s   axiom_destroyed (if applicable)
- *   +10s  hp_update snapshot
- *   +17s  commentary
- *   +10s  verdict (verdict scenes)
- *   +12s  pool_settle (verdict scenes)
+ * Each chunk is 10 seconds. Timestamps are cumulative from chunk durations.
+ * Events within a chunk are placed at fixed offsets (all within 0-9s):
+ *   +0s   round_start (attack/intro/establishing scenes)
+ *   +2s   defense (defense scenes), commentary text (commentary scenes)
+ *   +5s   attack damage lands, verdict announcement
+ *   +6s   axiom_destroyed (if applicable)
+ *   +7s   hp_update snapshot, pool_settle
  */
 export function buildTimeline(chunks: SceneChunk[]): TimelineEvent[] {
   const events: TimelineEvent[] = []
 
+  // Calculate cumulative start times (supports variable-duration chunks)
+  const startTimes: number[] = []
+  let cumulative = 0
   for (const chunk of chunks) {
-    const base = chunk.index * chunk.durationSeconds
+    startTimes.push(cumulative)
+    cumulative += chunk.durationSeconds
+  }
+
+  // Track whether we've seen the first attack (for pool_lock)
+  let firstAttackSeen = false
+
+  for (const chunk of chunks) {
+    const base = startTimes[chunk.index]
 
     // Round transition
-    if (chunk.sceneType === 'attack' || chunk.sceneType === 'intro') {
+    if (chunk.sceneType === 'attack' || chunk.sceneType === 'intro' || chunk.sceneType === 'establishing') {
       events.push({ t: base, type: 'round_start', round: chunk.roundNumber })
     }
 
-    // Pool locks when first attack begins (chunk index 1, after intro)
-    if (chunk.sceneType === 'attack' && chunk.index === 1) {
+    // Pool locks at first attack scene
+    if (chunk.sceneType === 'attack' && !firstAttackSeen) {
+      firstAttackSeen = true
       events.push({ t: base, type: 'pool_lock' })
     }
 
@@ -137,10 +146,10 @@ export function buildTimeline(chunks: SceneChunk[]): TimelineEvent[] {
       events.push({ t: base + 2, type: 'defense', side: chunk.targetSide })
     }
 
-    // Attack lands mid-scene
+    // Attack damage mid-scene
     if (chunk.sceneType === 'attack' && chunk.damagedAxiomId && chunk.targetSide) {
       events.push({
-        t: base + 8,
+        t: base + 5,
         type: 'attack',
         side: chunk.targetSide,
         axiomId: chunk.damagedAxiomId,
@@ -151,7 +160,7 @@ export function buildTimeline(chunks: SceneChunk[]): TimelineEvent[] {
     // Axiom destroyed
     if (chunk.isDestroyed && chunk.damagedAxiomId && chunk.targetSide) {
       events.push({
-        t: base + 9,
+        t: base + 6,
         type: 'axiom_destroyed',
         side: chunk.targetSide,
         axiomId: chunk.damagedAxiomId,
@@ -159,9 +168,9 @@ export function buildTimeline(chunks: SceneChunk[]): TimelineEvent[] {
       })
     }
 
-    // HP snapshot after damage (every chunk gets one)
+    // HP snapshot (every scene gets one, near end)
     events.push({
-      t: base + 10,
+      t: base + 7,
       type: 'hp_update',
       hpA: chunk.hpA,
       hpB: chunk.hpB,
@@ -169,15 +178,19 @@ export function buildTimeline(chunks: SceneChunk[]): TimelineEvent[] {
       hpPercentB: chunk.hpPercentB,
     })
 
-    // Commentary
+    // Commentary (on dedicated commentary scenes)
     if (chunk.commentary) {
-      events.push({ t: base + 17, type: 'commentary', text: chunk.commentary })
+      events.push({ t: base + 2, type: 'commentary', text: chunk.commentary })
     }
 
     // Verdict scene
     if (chunk.sceneType === 'verdict' && chunk.winner) {
-      events.push({ t: base + 10, type: 'verdict', winner: chunk.winner })
-      events.push({ t: base + 12, type: 'pool_settle', winningSide: chunk.winner === 'draw' ? null : chunk.winner })
+      events.push({ t: base + 5, type: 'verdict', winner: chunk.winner })
+      events.push({
+        t: base + 7,
+        type: 'pool_settle',
+        winningSide: chunk.winner === 'draw' ? null : chunk.winner,
+      })
     }
   }
 

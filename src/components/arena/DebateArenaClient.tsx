@@ -152,6 +152,9 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
   const [videoTimeline, setVideoTimeline] = useState<TimelineEvent[] | null>(null)
   const [videoStatus, setVideoStatus] = useState<string | null>(null)
   const [videoProgress, setVideoProgress] = useState(0)
+  const [videoTotal, setVideoTotal] = useState(0)
+  const [videoEstimatedSeconds, setVideoEstimatedSeconds] = useState(0)
+  const [videoDurationSeconds, setVideoDurationSeconds] = useState(0)
   const [showCinematic, setShowCinematic] = useState(false)
 
   const { session, bookA, bookB, axioms, rounds, arguments: args } = state
@@ -217,6 +220,11 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
         } else if (data.status === 'generating') {
           setVideoStatus('generating')
           setVideoProgress(data.progress || 0)
+          setVideoTotal(data.total || 0)
+          setVideoEstimatedSeconds(data.estimatedSecondsRemaining || 0)
+          setVideoDurationSeconds(data.videoDurationSeconds || 0)
+        } else if (data.status === 'failed') {
+          setVideoStatus('failed')
         }
       } catch { /* video check optional */ }
     }
@@ -238,11 +246,15 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
           setVideoUrl(data.videoUrl)
           setVideoTimeline(data.timeline || [])
           setVideoStatus('complete')
-          setVideoProgress(data.total || 9)
+          setVideoProgress(data.total || 0)
+          setVideoEstimatedSeconds(0)
         } else if (data.status === 'generating') {
           setVideoProgress(data.progress || 0)
-        } else if (data.status === 'error') {
-          setVideoStatus('error')
+          setVideoTotal(data.total || 0)
+          setVideoEstimatedSeconds(data.estimatedSecondsRemaining || 0)
+          setVideoDurationSeconds(data.videoDurationSeconds || 0)
+        } else if (data.status === 'failed') {
+          setVideoStatus('failed')
         }
       } catch { /* polling retry */ }
     }, 5000)
@@ -263,13 +275,27 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
       if (!res.ok) {
         const err = await res.json()
         console.error('Video generation failed:', err.error)
-        setVideoStatus('error')
+        setVideoStatus('failed')
         return
+      }
+      const data = await res.json()
+      // Read initial estimates from POST response
+      if (data.estimatedSecondsRemaining) {
+        setVideoEstimatedSeconds(data.estimatedSecondsRemaining)
+      }
+      if (data.videoDurationSeconds) {
+        setVideoDurationSeconds(data.videoDurationSeconds)
+      }
+      if (data.total) {
+        setVideoTotal(data.total)
+      }
+      if (data.progress) {
+        setVideoProgress(data.progress)
       }
       // POST triggers background pipeline — polling picks up progress
     } catch (err) {
       console.error('Video generation request failed:', err)
-      setVideoStatus('error')
+      setVideoStatus('failed')
     }
   }, [session.id, videoStatus])
 
@@ -683,10 +709,25 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
                 animate={{ scale: 1, opacity: 1 }}
                 transition={{ type: 'spring', stiffness: 100, damping: 15, delay: 0.3 }}
               >
-                <Trophy className="mx-auto h-16 w-16 text-amber-400 mb-4" />
-                <p className="text-4xl font-black text-amber-400 uppercase tracking-wider">{winnerBook.title}</p>
-                <p className="text-xl text-amber-300/60 uppercase tracking-[0.3em] mt-2">Wins</p>
-                <p className="text-sm text-zinc-500 mt-3">Victory by {session.win_condition}</p>
+                {/* Show winner only when NOT generating video (avoid spoilers) */}
+                {videoStatus !== 'generating' && (
+                  <>
+                    <Trophy className="mx-auto h-16 w-16 text-amber-400 mb-4" />
+                    <p className="text-4xl font-black text-amber-400 uppercase tracking-wider">{winnerBook.title}</p>
+                    <p className="text-xl text-amber-300/60 uppercase tracking-[0.3em] mt-2">Wins</p>
+                    <p className="text-sm text-zinc-500 mt-3">Victory by {session.win_condition}</p>
+                  </>
+                )}
+
+                {/* Show matchup during video generation (no spoilers!) */}
+                {videoStatus === 'generating' && (
+                  <>
+                    <Film className="mx-auto h-12 w-12 text-amber-400 mb-4" />
+                    <p className="text-2xl font-black text-red-400 uppercase tracking-wider">{bookA.title}</p>
+                    <p className="text-lg text-zinc-500 font-bold my-1">vs</p>
+                    <p className="text-2xl font-black text-blue-400 uppercase tracking-wider">{bookB.title}</p>
+                  </>
+                )}
 
                 {/* ── Cinematic Replay Buttons ── */}
                 <div className="mt-6 flex items-center justify-center gap-3">
@@ -699,20 +740,27 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
                       Watch Cinematic Replay
                     </button>
                   ) : videoStatus === 'generating' ? (
-                    <div className="px-5 py-2.5 rounded-lg border border-amber-600/30 bg-black/60 backdrop-blur-sm">
+                    <div className="px-5 py-2.5 rounded-lg border border-amber-600/30 bg-black/60 backdrop-blur-sm min-w-[280px]">
                       <Loader2 className="inline-block w-4 h-4 mr-2 -mt-0.5 animate-spin text-amber-400" />
                       <span className="text-sm font-bold text-amber-400">
-                        Generating Replay… {videoProgress}/9 scenes
+                        Rendering {videoDurationSeconds > 0 ? `${Math.round(videoDurationSeconds / 60)} min` : ''} cinematic replay…
                       </span>
                       <div className="mt-2 h-1.5 rounded-full bg-amber-950/50 overflow-hidden">
                         <motion.div
                           className="h-full rounded-full bg-amber-500"
-                          animate={{ width: `${(videoProgress / 9) * 100}%` }}
+                          animate={{ width: `${videoTotal > 0 ? (videoProgress / videoTotal) * 100 : 5}%` }}
                           transition={{ type: 'spring', stiffness: 60, damping: 20 }}
                         />
                       </div>
+                      <p className="text-[11px] text-zinc-500 mt-1.5">
+                        {videoEstimatedSeconds > 60
+                          ? `~${Math.ceil(videoEstimatedSeconds / 60)} min remaining`
+                          : videoEstimatedSeconds > 0
+                            ? `~${videoEstimatedSeconds}s remaining`
+                            : 'Starting pipeline…'}
+                      </p>
                     </div>
-                  ) : videoStatus === 'error' ? (
+                  ) : videoStatus === 'failed' ? (
                     <button
                       onClick={generateCinematicVideo}
                       className="px-5 py-2.5 rounded-lg font-bold uppercase tracking-wider text-sm text-amber-400 border border-red-500/40 bg-red-950/30 hover:bg-red-950/50 transition-all"
@@ -952,22 +1000,22 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
             ) : videoStatus === 'generating' ? (
               <div className="px-4 py-2 rounded-lg border border-amber-600/30 bg-black/70 backdrop-blur-sm text-xs text-amber-400 font-bold">
                 <Loader2 className="inline-block w-3.5 h-3.5 mr-1.5 -mt-0.5 animate-spin" />
-                Generating… {videoProgress}/9
+                Rendering replay… {videoEstimatedSeconds > 60 ? `~${Math.ceil(videoEstimatedSeconds / 60)} min left` : videoEstimatedSeconds > 0 ? `~${videoEstimatedSeconds}s left` : ''}
               </div>
-            ) : videoStatus !== 'error' ? (
+            ) : videoStatus === 'failed' ? (
+              <button
+                onClick={generateCinematicVideo}
+                className="px-4 py-2 rounded-lg font-bold uppercase tracking-wider text-xs text-amber-400 border border-red-500/40 bg-red-950/30 hover:bg-red-950/50 transition-all"
+              >
+                Retry Replay
+              </button>
+            ) : (
               <button
                 onClick={generateCinematicVideo}
                 className="px-4 py-2 rounded-lg font-bold uppercase tracking-wider text-xs text-amber-400 border border-amber-600/30 bg-black/70 backdrop-blur-sm hover:bg-amber-950/50 transition-all"
               >
                 <Film className="inline-block w-3.5 h-3.5 mr-1.5 -mt-0.5" />
                 Generate Replay
-              </button>
-            ) : (
-              <button
-                onClick={generateCinematicVideo}
-                className="px-4 py-2 rounded-lg font-bold uppercase tracking-wider text-xs text-amber-400 border border-red-500/40 bg-red-950/30 hover:bg-red-950/50 transition-all"
-              >
-                Retry Replay
               </button>
             )}
           </div>

@@ -1,5 +1,10 @@
 // POST /api/arena/[id]/video — Trigger cinematic video generation
 // GET  /api/arena/[id]/video — Poll generation progress
+//
+// Architecture: Self-chaining pipeline. Each POST processes ONE video chunk
+// (~60-120s), then triggers the next step via an internal HTTP call to itself.
+// This keeps each serverless invocation within Vercel's 300s limit while
+// running the entire pipeline autonomously — no client re-triggering needed.
 
 import { NextResponse } from 'next/server'
 import { after } from 'next/server'
@@ -17,16 +22,56 @@ import {
   uploadVideoToStorage,
 } from '@/lib/arena/video-service'
 import { buildTimeline } from '@/lib/arena/timeline-sync'
+import type { SceneChunk } from '@/lib/arena/timeline-sync'
 
-// Allow this route up to 5 minutes (300s) for video generation pipeline.
-// Hobby plan: 60s max. Pro plan: 300s max.
+// One step = one LTX API call (~60-120s) + upload (~10-20s). Fits in 300s.
 export const maxDuration = 300
+
+// ─── Types ───────────────────────────────────────────────────────
+
+interface VideoState {
+  chunks: SceneChunk[]
+  currentChunkIndex: number   // next chunk to process (0-based)
+  videoUri: string | null     // LTX storage URI of accumulated video
+  stepInProgress: boolean
+  stepStartedAt?: string      // ISO timestamp for stale lock detection
+  avgSecondsPerStep: number   // running average for time estimates
+}
 
 function getServiceClient() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
   )
+}
+
+/** Check if this is an internal pipeline continuation call */
+function isInternalCall(request: Request): boolean {
+  const secret = request.headers.get('x-video-pipeline-key')
+  return !!secret && secret === process.env.VIDEO_PIPELINE_SECRET
+}
+
+/** Trigger the next pipeline step via self-invocation */
+async function triggerNextStep(sessionId: string) {
+  const baseUrl = process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}`
+    : (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000')
+
+  try {
+    const res = await fetch(`${baseUrl}/api/arena/${sessionId}/video`, {
+      method: 'POST',
+      headers: {
+        'x-video-pipeline-key': process.env.VIDEO_PIPELINE_SECRET || '',
+        'Content-Type': 'application/json',
+      },
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      console.error(`[Video] [${sessionId}] Self-trigger failed (${res.status}): ${err}`)
+    }
+  } catch (err) {
+    console.error(`[Video] [${sessionId}] Self-trigger error:`, err)
+  }
 }
 
 // ─── GET: Poll progress ──────────────────────────────────────────
@@ -41,7 +86,7 @@ export async function GET(
     const db = getServiceClient()
     const { data: session, error } = await db
       .from('debate_sessions')
-      .select('video_status, video_progress, video_url, video_timeline')
+      .select('video_status, video_progress, video_url, video_timeline, video_state')
       .eq('id', id)
       .single()
 
@@ -49,11 +94,31 @@ export async function GET(
       return NextResponse.json({ error: 'Debate not found' }, { status: 404 })
     }
 
+    const state = session.video_state as VideoState | null
+    const totalChunks = state?.chunks?.length || 0
+    const currentIndex = state?.currentChunkIndex || 0
+    const avgPerStep = state?.avgSecondsPerStep || 120
+
+    // Estimated time remaining
+    const remainingChunks = Math.max(0, totalChunks - currentIndex)
+    const estimatedSecondsRemaining = state?.stepInProgress
+      ? remainingChunks * avgPerStep  // include current step
+      : remainingChunks * avgPerStep
+
+    // Total video duration in seconds
+    const videoDurationSeconds = state?.chunks
+      ? state.chunks.reduce((sum, c) => sum + c.durationSeconds, 0)
+      : 0
+
     return NextResponse.json({
       status: session.video_status || 'none',
       progress: session.video_progress || 0,
+      total: totalChunks > 0 ? totalChunks + 1 : 0,
       videoUrl: session.video_url || null,
       timeline: session.video_timeline || null,
+      stepInProgress: state?.stepInProgress || false,
+      estimatedSecondsRemaining: Math.round(estimatedSecondsRemaining),
+      videoDurationSeconds,
     })
   } catch (err) {
     console.error('[Video] GET error:', err)
@@ -64,133 +129,185 @@ export async function GET(
   }
 }
 
-// ─── POST: Trigger generation ────────────────────────────────────
+// ─── POST: Initialize or continue pipeline ───────────────────────
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
-  const auth = await resolveAuth(request)
+  const internal = isInternalCall(request)
 
-  if (!auth) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  // External calls need user auth; internal pipeline calls are pre-authorized
+  if (!internal) {
+    const auth = await resolveAuth(request)
+    if (!auth) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
   }
 
   try {
-    // 1. Validate debate is completed
-    const [session, axioms, rounds, args] = await Promise.all([
-      getDebateSession(id),
-      getDebateAxioms(id),
-      getDebateRounds(id),
-      getDebateArguments(id),
-    ])
-
-    if (!session) {
-      return NextResponse.json({ error: 'Debate not found' }, { status: 404 })
-    }
-
-    if (session.status !== 'completed') {
-      return NextResponse.json(
-        { error: 'Debate must be completed before generating video' },
-        { status: 400 },
-      )
-    }
-
-    // Check if already generating or complete
     const db = getServiceClient()
     const { data: current } = await db
       .from('debate_sessions')
-      .select('video_status')
+      .select('video_status, video_progress, video_state, status')
       .eq('id', id)
       .single()
 
-    if (current?.video_status === 'generating') {
-      return NextResponse.json(
-        { error: 'Video generation already in progress' },
-        { status: 409 },
-      )
+    if (!current) {
+      return NextResponse.json({ error: 'Debate not found' }, { status: 404 })
     }
 
-    if (current?.video_status === 'complete') {
+    // Already complete
+    if (current.video_status === 'complete') {
       return NextResponse.json(
         { error: 'Video already generated. Use GET to retrieve.' },
         { status: 409 },
       )
     }
 
-    // 2. Mark as generating
-    await db
-      .from('debate_sessions')
-      .update({ video_status: 'generating', video_progress: 0 })
-      .eq('id', id)
+    const state = current.video_state as VideoState | null
 
-    // 3. Fetch book info for screenplay
-    const [{ data: bookAData }, { data: bookBData }] = await Promise.all([
-      db
-        .from('books')
-        .select('id, title, author_id')
-        .eq('id', session.book_a_id)
-        .single(),
-      db
-        .from('books')
-        .select('id, title, author_id')
-        .eq('id', session.book_b_id)
-        .single(),
-    ])
+    // Step in progress — check for stale lock (> 5 min)
+    if (state?.stepInProgress) {
+      const stepAge = state.stepStartedAt
+        ? Date.now() - new Date(state.stepStartedAt).getTime()
+        : Infinity
 
-    const authorIds = [bookAData?.author_id, bookBData?.author_id].filter(
-      Boolean,
-    )
-    const { data: authors } = authorIds.length
-      ? await db
-          .from('authors')
-          .select('id, display_name')
-          .in('id', authorIds)
-      : { data: [] }
-    const authorMap = new Map(
-      (authors || []).map(
-        (a: { id: string; display_name: string }) => [a.id, a] as const,
-      ),
-    )
-
-    const axiomsA = axioms.filter((a) => a.side === 'a')
-    const axiomsB = axioms.filter((a) => a.side === 'b')
-
-    const transcript = {
-      session,
-      rounds,
-      arguments: args,
-      axiomsA,
-      axiomsB,
-      bookATitle: bookAData?.title || 'Book A',
-      bookAAuthor:
-        authorMap.get(bookAData?.author_id)?.display_name || 'Author A',
-      bookBTitle: bookBData?.title || 'Book B',
-      bookBAuthor:
-        authorMap.get(bookBData?.author_id)?.display_name || 'Author B',
+      if (stepAge < 5 * 60 * 1000) {
+        // Active step — tell client to keep polling
+        return NextResponse.json({
+          status: 'generating',
+          progress: current.video_progress || 0,
+          message: 'Step in progress. Poll GET for updates.',
+          stepInProgress: true,
+        }, { status: 202 })
+      }
+      // Stale lock — fall through to retry
+      console.warn(`[Video] [${id}] Stale step lock (${Math.round(stepAge / 1000)}s). Retrying.`)
     }
 
-    // 4. Use next/server after() to run the pipeline after response is sent.
-    // This keeps the serverless function alive for the full maxDuration.
-    after(async () => {
-      try {
-        await runPipeline(id, transcript)
-      } catch (err) {
-        console.error('[Video] Pipeline failed:', (err as Error)?.message || err)
-        console.error('[Video] Stack:', (err as Error)?.stack)
-        const failDb = getServiceClient()
-        await failDb
-          .from('debate_sessions')
-          .update({ video_status: 'failed' })
-          .eq('id', id)
+    // ── STEP 0: First call — generate screenplay + start chain ──
+    if (!state) {
+      if (current.status !== 'completed') {
+        return NextResponse.json(
+          { error: 'Debate must be completed before generating video' },
+          { status: 400 },
+        )
       }
+
+      // Fetch debate data
+      const [session, axioms, rounds, args] = await Promise.all([
+        getDebateSession(id),
+        getDebateAxioms(id),
+        getDebateRounds(id),
+        getDebateArguments(id),
+      ])
+
+      if (!session) {
+        return NextResponse.json({ error: 'Session not found' }, { status: 404 })
+      }
+
+      // Fetch book info
+      const [{ data: bookAData }, { data: bookBData }] = await Promise.all([
+        db.from('books').select('id, title, author_id').eq('id', session.book_a_id).single(),
+        db.from('books').select('id, title, author_id').eq('id', session.book_b_id).single(),
+      ])
+
+      const authorIds = [bookAData?.author_id, bookBData?.author_id].filter(Boolean)
+      const { data: authors } = authorIds.length
+        ? await db.from('authors').select('id, display_name').in('id', authorIds)
+        : { data: [] }
+      const authorMap = new Map(
+        (authors || []).map((a: { id: string; display_name: string }) => [a.id, a] as const),
+      )
+
+      const transcript = {
+        session,
+        rounds,
+        arguments: args,
+        axiomsA: axioms.filter((a) => a.side === 'a'),
+        axiomsB: axioms.filter((a) => a.side === 'b'),
+        bookATitle: bookAData?.title || 'Book A',
+        bookAAuthor: authorMap.get(bookAData?.author_id)?.display_name || 'Author A',
+        bookBTitle: bookBData?.title || 'Book B',
+        bookBAuthor: authorMap.get(bookBData?.author_id)?.display_name || 'Author B',
+      }
+
+      // Generate screenplay (~10-30s LLM call)
+      console.log(`[Video] [${id}] Generating screenplay...`)
+      const chunks = await generateScreenplay(transcript)
+      const videoDuration = chunks.reduce((s, c) => s + c.durationSeconds, 0)
+      console.log(`[Video] [${id}] Screenplay: ${chunks.length} scenes, ${videoDuration}s video`)
+
+      // Initialize pipeline state
+      const initialState: VideoState = {
+        chunks,
+        currentChunkIndex: 0,
+        videoUri: null,
+        stepInProgress: true,
+        stepStartedAt: new Date().toISOString(),
+        avgSecondsPerStep: 120,
+      }
+
+      await db
+        .from('debate_sessions')
+        .update({
+          video_status: 'generating',
+          video_progress: 1,
+          video_state: initialState,
+        })
+        .eq('id', id)
+
+      // Process first chunk in background — chain continues automatically
+      after(async () => {
+        await runStep(id, initialState)
+      })
+
+      return NextResponse.json({
+        status: 'generating',
+        progress: 1,
+        total: chunks.length + 1,
+        message: `Screenplay ready (${chunks.length} scenes, ${Math.round(videoDuration / 60)} min video). Rendering started.`,
+        estimatedSecondsRemaining: chunks.length * 120,
+        videoDurationSeconds: videoDuration,
+      })
+    }
+
+    // ── STEP N: Continue pipeline (internal chain or retry) ──
+    if (state.currentChunkIndex >= state.chunks.length) {
+      // All chunks done — shouldn't reach here normally
+      return NextResponse.json({
+        status: 'generating',
+        message: 'Finalizing...',
+      })
+    }
+
+    // Mark step in progress
+    const stepState: VideoState = {
+      ...state,
+      stepInProgress: true,
+      stepStartedAt: new Date().toISOString(),
+    }
+
+    await db
+      .from('debate_sessions')
+      .update({
+        video_status: 'generating', // reset from 'failed' on retry
+        video_state: stepState,
+      })
+      .eq('id', id)
+
+    // Process chunk in background
+    after(async () => {
+      await runStep(id, stepState)
     })
 
     return NextResponse.json({
       status: 'generating',
-      progress: 0,
-      message: 'Video generation started. Poll GET for progress.',
+      progress: current.video_progress || state.currentChunkIndex + 1,
+      total: state.chunks.length + 1,
+      stepInProgress: true,
     })
   } catch (err) {
     console.error('[Video] POST error:', err)
@@ -201,78 +318,105 @@ export async function POST(
   }
 }
 
-// ─── Background Pipeline ─────────────────────────────────────────
+// ─── Step Runner (executes inside after()) ───────────────────────
 
-async function runPipeline(
-  sessionId: string,
-  transcript: Parameters<typeof generateScreenplay>[0],
-) {
+async function runStep(sessionId: string, state: VideoState) {
   const db = getServiceClient()
   const videoService = createVideoService()
+  const stepStart = Date.now()
 
-  // Step 1: Generate screenplay
-  console.log(`[Video] Generating screenplay for ${sessionId}...`)
-  const chunks = await generateScreenplay(transcript)
-  const totalChunks = chunks.length
+  try {
+    const { chunks, currentChunkIndex, videoUri } = state
+    const chunk = chunks[currentChunkIndex]
+    const isFirst = currentChunkIndex === 0
+    const isLast = currentChunkIndex === chunks.length - 1
 
-  await db
-    .from('debate_sessions')
-    .update({ video_progress: 1 })
-    .eq('id', sessionId)
+    let mp4Buffer: Buffer
 
-  // Step 2: Generate first chunk
-  console.log(`[Video] Generating chunk 1/${totalChunks}...`)
-  let mp4Buffer = await videoService.generateFirst({
-    prompt: chunks[0].videoPrompt,
-    duration: chunks[0].durationSeconds,
-    cameraMotion: chunks[0].cameraMotion,
-  })
+    if (isFirst) {
+      console.log(`[Video] [${sessionId}] Step 0: generateFirst (${chunk.durationSeconds}s)`)
+      mp4Buffer = await videoService.generateFirst({
+        prompt: chunk.videoPrompt,
+        duration: chunk.durationSeconds,
+        cameraMotion: chunk.cameraMotion,
+      })
+      console.log(`[Video] [${sessionId}] First chunk: ${mp4Buffer.length} bytes`)
+    } else {
+      if (!videoUri) throw new Error(`No videoUri for extend at chunk ${currentChunkIndex}`)
+      console.log(`[Video] [${sessionId}] Step ${currentChunkIndex}: extend (${chunk.durationSeconds}s)`)
+      mp4Buffer = await videoService.extendVideo({
+        videoUri,
+        prompt: chunk.videoPrompt,
+        duration: chunk.durationSeconds,
+      })
+      console.log(`[Video] [${sessionId}] Chunk ${currentChunkIndex + 1}: ${mp4Buffer.length} bytes`)
+    }
 
-  await db
-    .from('debate_sessions')
-    .update({ video_progress: 2 })
-    .eq('id', sessionId)
+    const stepDuration = Math.round((Date.now() - stepStart) / 1000)
+    // Running average for time estimates
+    const avgSeconds = Math.round(
+      (state.avgSecondsPerStep * currentChunkIndex + stepDuration) / (currentChunkIndex + 1),
+    )
 
-  // Step 3: Iteratively extend for remaining chunks
-  for (let i = 1; i < chunks.length; i++) {
-    console.log(`[Video] Extending with chunk ${i + 1}/${totalChunks}...`)
+    if (isLast) {
+      // ── Finalize: upload to Supabase Storage + build timeline ──
+      console.log(`[Video] [${sessionId}] Final chunk done. Uploading to storage (${mp4Buffer.length} bytes)...`)
+      const videoUrl = await uploadVideoToStorage(mp4Buffer, sessionId)
+      const timeline = buildTimeline(chunks)
 
-    // Upload current video to get storage URI for extend
-    const videoUri = await videoService.uploadVideo(mp4Buffer)
-    console.log(`[Video] Uploaded chunk ${i}, got URI: ${videoUri}`)
+      await db
+        .from('debate_sessions')
+        .update({
+          video_status: 'complete',
+          video_progress: chunks.length + 1,
+          video_url: videoUrl,
+          video_timeline: timeline,
+          video_state: {
+            ...state,
+            currentChunkIndex: currentChunkIndex + 1,
+            stepInProgress: false,
+            avgSecondsPerStep: avgSeconds,
+          },
+        })
+        .eq('id', sessionId)
 
-    // Extend with next scene
-    mp4Buffer = await videoService.extendVideo({
-      videoUri,
-      prompt: chunks[i].videoPrompt,
-      duration: chunks[i].durationSeconds,
-    })
+      console.log(`[Video] [${sessionId}] Pipeline complete: ${videoUrl}`)
+    } else {
+      // ── Upload to LTX for next extend, then chain ──
+      console.log(`[Video] [${sessionId}] Uploading to LTX for next extend...`)
+      const newVideoUri = await videoService.uploadVideo(mp4Buffer)
+      console.log(`[Video] [${sessionId}] URI: ${newVideoUri}`)
 
-    console.log(`[Video] Extended to chunk ${i + 1}, buffer size: ${mp4Buffer.length}`)
+      await db
+        .from('debate_sessions')
+        .update({
+          video_progress: currentChunkIndex + 2,
+          video_state: {
+            ...state,
+            currentChunkIndex: currentChunkIndex + 1,
+            videoUri: newVideoUri,
+            stepInProgress: false,
+            avgSecondsPerStep: avgSeconds,
+          },
+        })
+        .eq('id', sessionId)
 
+      console.log(`[Video] [${sessionId}] Step ${currentChunkIndex} done (${stepDuration}s). Chaining next...`)
+
+      // Self-chain: trigger next step via internal HTTP call
+      await triggerNextStep(sessionId)
+    }
+  } catch (err) {
+    console.error(`[Video] [${sessionId}] Step failed:`, (err as Error)?.message || err)
+    console.error(`[Video] [${sessionId}] Stack:`, (err as Error)?.stack)
+
+    // Mark failed but preserve state for retry
     await db
       .from('debate_sessions')
-      .update({ video_progress: i + 2 }) // +2 because step 1 is screenplay
+      .update({
+        video_status: 'failed',
+        video_state: { ...state, stepInProgress: false },
+      })
       .eq('id', sessionId)
   }
-
-  // Step 4: Upload final video to Supabase Storage
-  console.log(`[Video] Uploading final video to storage (${mp4Buffer.length} bytes)...`)
-  const videoUrl = await uploadVideoToStorage(mp4Buffer, sessionId)
-
-  // Step 5: Build timeline from chunk metadata
-  const timeline = buildTimeline(chunks)
-
-  // Step 6: Store video URL + timeline
-  await db
-    .from('debate_sessions')
-    .update({
-      video_status: 'complete',
-      video_progress: totalChunks + 1,
-      video_url: videoUrl,
-      video_timeline: timeline,
-    })
-    .eq('id', sessionId)
-
-  console.log(`[Video] Pipeline complete for ${sessionId}: ${videoUrl}`)
 }
