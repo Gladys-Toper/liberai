@@ -2,6 +2,7 @@
 // GET  /api/arena/[id]/video — Poll generation progress
 
 import { NextResponse } from 'next/server'
+import { after } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { resolveAuth } from '@/lib/auth/resolve-auth'
 import {
@@ -16,6 +17,10 @@ import {
   uploadVideoToStorage,
 } from '@/lib/arena/video-service'
 import { buildTimeline } from '@/lib/arena/timeline-sync'
+
+// Allow this route up to 5 minutes (300s) for video generation pipeline.
+// Hobby plan: 60s max. Pro plan: 300s max.
+export const maxDuration = 300
 
 function getServiceClient() {
   return createClient(
@@ -152,9 +157,7 @@ export async function POST(
     const axiomsA = axioms.filter((a) => a.side === 'a')
     const axiomsB = axioms.filter((a) => a.side === 'b')
 
-    // 4. Run pipeline in background (non-blocking response)
-    // We respond immediately and the client polls GET for progress.
-    runPipeline(id, {
+    const transcript = {
       session,
       rounds,
       arguments: args,
@@ -166,14 +169,22 @@ export async function POST(
       bookBTitle: bookBData?.title || 'Book B',
       bookBAuthor:
         authorMap.get(bookBData?.author_id)?.display_name || 'Author B',
-    }).catch((err) => {
-      console.error('[Video] Pipeline failed:', err?.message || err)
-      console.error('[Video] Stack:', err?.stack)
-      // Mark as failed with error info for debugging
-      db.from('debate_sessions')
-        .update({ video_status: 'failed' })
-        .eq('id', id)
-        .then(() => {})
+    }
+
+    // 4. Use next/server after() to run the pipeline after response is sent.
+    // This keeps the serverless function alive for the full maxDuration.
+    after(async () => {
+      try {
+        await runPipeline(id, transcript)
+      } catch (err) {
+        console.error('[Video] Pipeline failed:', (err as Error)?.message || err)
+        console.error('[Video] Stack:', (err as Error)?.stack)
+        const failDb = getServiceClient()
+        await failDb
+          .from('debate_sessions')
+          .update({ video_status: 'failed' })
+          .eq('id', id)
+      }
     })
 
     return NextResponse.json({
@@ -226,8 +237,9 @@ async function runPipeline(
   for (let i = 1; i < chunks.length; i++) {
     console.log(`[Video] Extending with chunk ${i + 1}/${totalChunks}...`)
 
-    // Upload current video to get URI
+    // Upload current video to get storage URI for extend
     const videoUri = await videoService.uploadVideo(mp4Buffer)
+    console.log(`[Video] Uploaded chunk ${i}, got URI: ${videoUri}`)
 
     // Extend with next scene
     mp4Buffer = await videoService.extendVideo({
@@ -236,6 +248,8 @@ async function runPipeline(
       duration: chunks[i].durationSeconds,
     })
 
+    console.log(`[Video] Extended to chunk ${i + 1}, buffer size: ${mp4Buffer.length}`)
+
     await db
       .from('debate_sessions')
       .update({ video_progress: i + 2 }) // +2 because step 1 is screenplay
@@ -243,7 +257,7 @@ async function runPipeline(
   }
 
   // Step 4: Upload final video to Supabase Storage
-  console.log(`[Video] Uploading final video to storage...`)
+  console.log(`[Video] Uploading final video to storage (${mp4Buffer.length} bytes)...`)
   const videoUrl = await uploadVideoToStorage(mp4Buffer, sessionId)
 
   // Step 5: Build timeline from chunk metadata

@@ -147,26 +147,53 @@ class LtxVideoService implements IVideoService {
   }
 
   async uploadVideo(mp4Buffer: Buffer): Promise<string> {
-    const blob = new Blob([new Uint8Array(mp4Buffer)], { type: 'video/mp4' })
-    const formData = new FormData()
-    formData.append('file', blob, 'video.mp4')
-
+    // Step 1: Request a presigned upload URL from LTX
     const res = await this.fetchWithRetry(`${LTX_BASE}/upload`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
       },
-      body: formData,
+      body: JSON.stringify({}),
     })
 
     if (!res.ok) {
       const errText = await res.text()
-      throw new Error(`LTX upload failed (${res.status}): ${errText}`)
+      throw new Error(`LTX upload request failed (${res.status}): ${errText}`)
     }
 
-    const data = await res.json()
-    // Upload returns a video_uri that can be used for extend/retake
-    return data.video_uri || data.uri || data.url
+    const data = await res.json() as {
+      upload_url: string
+      storage_uri: string
+      required_headers?: Record<string, string>
+    }
+
+    if (!data.upload_url || !data.storage_uri) {
+      throw new Error('LTX upload response missing upload_url or storage_uri')
+    }
+
+    // Step 2: PUT the actual video file to the presigned GCS URL
+    const uploadHeaders: Record<string, string> = {
+      'Content-Type': 'video/mp4',
+    }
+    // Include any required headers (e.g. x-goog-content-length-range)
+    if (data.required_headers) {
+      Object.assign(uploadHeaders, data.required_headers)
+    }
+
+    const putRes = await fetch(data.upload_url, {
+      method: 'PUT',
+      headers: uploadHeaders,
+      body: new Uint8Array(mp4Buffer),
+    })
+
+    if (!putRes.ok) {
+      const putErr = await putRes.text()
+      throw new Error(`LTX file upload to GCS failed (${putRes.status}): ${putErr}`)
+    }
+
+    // Step 3: Return the storage_uri for use with extend/retake
+    return data.storage_uri
   }
 
   async extendVideo(params: ExtendVideoParams): Promise<Buffer> {
