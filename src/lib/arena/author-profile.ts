@@ -68,8 +68,8 @@ async function extractAuthorMetadataWithAI(authorName: string): Promise<GrokAuth
     // Falls back to Gemini Flash only when XAI_API_KEY is not configured
     const isXAIConfigured = !!process.env.XAI_API_KEY
     const model = isXAIConfigured
-      ? xai('grok-3-fast')
-      : google('gemini-2.5-flash')
+      ? xai('grok-4.1-fast')
+      : google('gemini-3.1-flash')
 
     const { text } = await generateText({
       model,

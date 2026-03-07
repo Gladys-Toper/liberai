@@ -27,7 +27,7 @@ Top books: ${JSON.stringify(topBooks)}
 Top authors: ${JSON.stringify(topAuthors)}`
 
   const { text } = await generateText({
-    model: google('gemini-2.5-flash'),
+    model: google('gemini-3.1-flash'),
     system: `You are LiberAi's admin intelligence assistant with platform-wide data access. Be concise and data-driven.\n\n${context}`,
     prompt: message,
   })

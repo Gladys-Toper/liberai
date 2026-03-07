@@ -1,17 +1,42 @@
-// Sprint 8: Multi-Model Arena — Provider adapter for debate roles
+// ═══════════════════════════════════════════════════════════════════════════
+// ARENA AI CASTING — Single source of truth for ALL model assignments
+// ═══════════════════════════════════════════════════════════════════════════
 //
-// Model assignments (fixed):
-//   Debaters (both sides): OpenAI GPT
-//   Referee/Judge:         Google Gemini
-//   Commentator:           xAI Grok (falls back to Gemini if XAI_API_KEY missing)
-//   Synthesizer:           Google Gemini
+// ┌────────────────────┬──────────────────────┬──────────────────────────┐
+// │ Role               │ AI Provider          │ Model ID                 │
+// ├────────────────────┼──────────────────────┼──────────────────────────┤
+// │ Debaters (A & B)   │ OpenAI               │ gpt-5.3                  │
+// │ Axiom Extractor    │ OpenAI               │ gpt-5.3                  │
+// │ Referee / Judge    │ Google Gemini         │ gemini-3.1-pro           │
+// │ Synthesizer        │ Google Gemini         │ gemini-3.1-pro           │
+// │ Commentator        │ xAI Grok             │ grok-4.1-fast            │
+// │ (fallback)         │ Google Gemini         │ gemini-3.1-flash         │
+// └────────────────────┴──────────────────────┴──────────────────────────┘
+//
+// WHY THESE MODELS:
+//   GPT-5.3      — Best at structured argumentation and rhetorical depth
+//   Gemini 3.1 Pro — Best at impartial multi-criteria evaluation (judge)
+//   Grok 4.1 Fast  — Off-color, witty, edgy sports-style commentary
+//
+// CINEMATIC VIDEO PIPELINE (LTX 2.3):
+//   LTX generates video + lip-synced speech + ambient audio natively.
+//   Dialogue in quotation marks → synthesized speech with accent/emotion.
+//   The screenplay generator uses EACH ROLE'S OWN AI to write its lines:
+//     • Grok writes commentator dialogue (snarky, irreverent)
+//     • GPT writes debater dialogue (formal, incisive)
+//     • Gemini Pro writes referee verdict (authoritative, measured)
+//   This ensures voice consistency between the debate and the video.
+//
+// TO UPDATE MODELS: Change the MODEL_MAP below. Everything flows from here.
+// The screenplay generator imports getModel() — never hardcode model IDs elsewhere.
+// ═══════════════════════════════════════════════════════════════════════════
 
 import type { LanguageModel } from 'ai'
 import { openai } from '@ai-sdk/openai'
 import { google } from '@ai-sdk/google'
 import { xai } from '@ai-sdk/xai'
 
-// Model key type for pricing lookups
+// Model key type for pricing lookups (maps to MODEL_PRICING in pricing.ts)
 export type ModelKey = 'openai' | 'gemini' | 'grok'
 
 export type DebateRole =
@@ -24,15 +49,18 @@ export type DebateRole =
 // Check if XAI API key is configured (non-empty)
 const isXAIConfigured = !!process.env.XAI_API_KEY
 
-// Concrete model instances via Vercel AI SDK
-// Falls back to Gemini for commentator when XAI key is not configured
+// ── Concrete model instances via Vercel AI SDK ──────────────────────────
+// IMPORTANT: Keep these in sync with MODEL_PRICING in src/lib/payments/pricing.ts
 const MODEL_MAP: Record<ModelKey, LanguageModel> = {
-  openai: openai('gpt-5.4'),
-  gemini: google('gemini-2.5-flash'),
+  openai: openai('gpt-5.3'),                // GPT-5.3 — debaters + axiom extraction
+  gemini: google('gemini-3.1-pro'),          // Gemini 3.1 Pro — referee/judge + synthesizer
   grok: isXAIConfigured
-    ? xai('grok-3-fast')
-    : google('gemini-2.5-flash'), // Fallback when XAI not configured
+    ? xai('grok-4.1-fast')                   // Grok 4.1 Fast — off-color commentator
+    : google('gemini-3.1-flash'),            // Fallback when XAI_API_KEY not configured
 }
+
+// Gemini Flash — used for lightweight tasks (NOT for debate judging)
+export const geminiFlash = google('gemini-3.1-flash')
 
 export interface ArenaModelProvider {
   /** Get the LLM model for a given debate role */
@@ -44,7 +72,7 @@ export interface ArenaModelProvider {
 export class DefaultArenaModelProvider implements ArenaModelProvider {
   /**
    * Create the standard arena provider.
-   * Both debaters always use OpenAI GPT.
+   * Both debaters always use OpenAI GPT-5.3.
    */
   static create(): DefaultArenaModelProvider {
     return new DefaultArenaModelProvider()

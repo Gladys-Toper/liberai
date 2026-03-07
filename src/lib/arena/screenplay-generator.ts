@@ -1,4 +1,6 @@
+// ═══════════════════════════════════════════════════════════════════════════
 // Cinematic Video Pipeline — Screenplay Generator
+// ═══════════════════════════════════════════════════════════════════════════
 //
 // Converts a completed debate transcript (rounds, axioms, arguments, commentary)
 // into an array of SceneChunks, each with a rich video prompt for LTX 2.3.
@@ -12,11 +14,23 @@
 // describes what happens NEXT — a continuation from the previous scene's last frame.
 // The prompts must never re-describe the full setting, only the new action/camera move.
 //
-// LTX generates video + lip-synced speech natively. Dialogue in quotation marks
-// → synthesized speech with accent and emotion.
+// ── AI CASTING (matches model-provider.ts) ─────────────────────────────
+//
+// LTX 2.3 generates video + lip-synced speech + ambient audio natively.
+// Dialogue in quotation marks → synthesized speech with accent and emotion.
+// NO separate TTS needed. LTX IS the voice engine.
+//
+// Each role's dialogue is written by ITS OWN AI model for voice consistency:
+//   • GPT-5.3 (OpenAI)     → writes debater attack/defense lines
+//   • Grok 4.1 (xAI)       → writes commentator lines (snarky, off-color)
+//   • Gemini 3.1 Pro        → writes referee verdict (authoritative, measured)
+//
+// The screenplay generator calls EACH role's AI separately via the
+// ArenaModelProvider — never hardcode model IDs here.
+// ═══════════════════════════════════════════════════════════════════════════
 
 import { generateText } from 'ai'
-import { google } from '@ai-sdk/google'
+import { DefaultArenaModelProvider } from './model-provider'
 import type {
   DebateSession,
   DebateRound,
@@ -248,19 +262,29 @@ interface ScreenplayDialogue {
 }
 
 /**
- * Uses Gemini 2.5 Flash to convert the debate transcript into
- * short spoken dialogue for each scene. The debate engine provides
- * the analytical content (claims, rebuttals, HP damage, referee commentary).
- * This LLM transforms that into performable theatrical lines — short,
- * punchy phrases that LTX will render as lip-synced speech.
+ * Generate ALL spoken dialogue for the cinematic video.
+ *
+ * Each role's lines are written by its OWN AI model (via ArenaModelProvider):
+ *   • GPT-5.3   → debater attack/defense lines (formal, incisive)
+ *   • Grok 4.1  → commentator intro + round reactions (snarky, off-color, witty)
+ *   • Gemini 3.1 Pro → referee verdict announcement (authoritative, measured)
+ *
+ * LTX 2.3 handles all voice synthesis — dialogue in quotation marks becomes
+ * lip-synced speech with natural cadence, accent, and emotion. No separate TTS.
+ *
+ * The debate engine already generated the analytical content (claims, rebuttals,
+ * HP damage, referee evaluations). These LLM calls compress that into short
+ * performable theatrical lines (under 15 words each) for 10-second video scenes.
  */
 async function generateDialogue(
   transcript: DebateTranscript,
 ): Promise<ScreenplayDialogue> {
   const { session, rounds, arguments: args } = transcript
+  const provider = DefaultArenaModelProvider.create()
 
-  const roundSummaries = rounds
-    .filter((r) => r.status === 'completed')
+  const completedRounds = rounds.filter((r) => r.status === 'completed')
+
+  const roundSummaries = completedRounds
     .map((r) => {
       const roundArgs = args.filter((a) => a.round_id === r.id)
       const attack = roundArgs.find((a) => a.move_type === 'attack')
@@ -277,52 +301,125 @@ async function generateDialogue(
     })
     .join('\n\n')
 
-  const prompt = `You are a theatrical screenwriter writing dialogue for a cinematic Oxford Union debate broadcast. This will be rendered as a single continuous video — each scene extends seamlessly from the last.
-
-DEBATE:
+  const debateContext = `DEBATE:
   Book A: "${transcript.bookATitle}" by ${transcript.bookAAuthor}
   Book B: "${transcript.bookBTitle}" by ${transcript.bookBAuthor}
   Topic: "${session.crucible_question}"
   Winner: ${session.winner === 'a' ? transcript.bookATitle : session.winner === 'b' ? transcript.bookBTitle : 'Draw'}
 
 TRANSCRIPT:
-${roundSummaries}
+${roundSummaries}`
 
-INSTRUCTIONS:
-Write SHORT spoken dialogue for each scene. Put all speech in quotation marks (the video model lip-syncs quoted text).
+  // ── 1. GPT-5.3 writes debater lines (attack + defense) ──────────────
+  const debaterPrompt = `You are writing spoken dialogue for debaters in a cinematic Oxford Union debate video. Put ALL speech in quotation marks — the video engine lip-syncs quoted text.
 
-For each round, write:
-- attack: 1-2 sentences the speaker says at their podium (under 15 words)
-- defense: 1 sentence rebuttal (under 12 words)
-- commentary: 1 sentence commentator reaction (under 12 words, excited/witty sports-style)
+${debateContext}
 
-Also write:
-- intro: Commentator's 1-2 sentence opening (under 20 words total)
-- verdict: Referee announcement + commentator sign-off (under 20 words total)
+For EACH round number, write:
+- attack: 1-2 sentences the attacking speaker says at their podium. Formal, incisive, philosophical. UNDER 15 WORDS.
+- defense: 1 sentence rebuttal from the defending speaker. Sharp, measured. UNDER 12 WORDS.
 
-CRITICAL: Keep ALL dialogue extremely short. Each scene is only 10 seconds of video.
-Use academic/philosophical language. No profanity or violent imagery.
+CRITICAL: Each scene is only 10 seconds of video. Keep lines extremely short.
+Use academic/philosophical language. No profanity.
 
 Respond with valid JSON:
 {
-  "intro": "string",
   "rounds": {
-    "1": { "attack": "string", "defense": "string", "commentary": "string" },
+    "1": { "attack": "\"quoted dialogue here\"", "defense": "\"quoted dialogue here\"" },
     "2": { ... }
-  },
-  "verdict": "string"
+  }
 }`
 
-  const { text } = await generateText({
-    model: google('gemini-2.5-flash'),
-    prompt,
-    temperature: 0.7,
-  })
+  // ── 2. Grok writes commentator lines (intro + round reactions) ───────
+  const commentatorPrompt = `You are the off-color, witty sports commentator for a cinematic Oxford Union debate broadcast. Think irreverent, edgy, entertaining — like a boxing commentator who read too much philosophy. Put ALL speech in quotation marks — the video engine lip-syncs quoted text.
 
+${debateContext}
+
+Write:
+- intro: Your 1-2 sentence opening to camera. Hype the matchup. UNDER 20 WORDS.
+- For EACH round number: commentary — your 1 sentence reaction. Excited, witty, slightly irreverent. UNDER 12 WORDS.
+
+CRITICAL: Each scene is only 10 seconds of video. Be punchy.
+
+Respond with valid JSON:
+{
+  "intro": "\"quoted dialogue here\"",
+  "rounds": {
+    "1": { "commentary": "\"quoted dialogue here\"" },
+    "2": { ... }
+  }
+}`
+
+  // ── 3. Gemini Pro writes referee verdict ─────────────────────────────
+  const refereePrompt = `You are the authoritative referee announcing the verdict of an Oxford Union debate. Measured, formal, definitive. Put ALL speech in quotation marks — the video engine lip-syncs quoted text.
+
+${debateContext}
+
+Write the verdict announcement: the referee steps to center stage and announces the winner. Follow with one sentence of closing authority. UNDER 20 WORDS TOTAL.
+
+Respond with valid JSON:
+{
+  "verdict": "\"quoted dialogue here\""
+}`
+
+  // Run all 3 in parallel — each role uses its own AI
+  console.log('[Screenplay] Generating dialogue: GPT (debaters) + Grok (commentator) + Gemini Pro (referee)')
+
+  const [debaterResult, commentatorResult, refereeResult] = await Promise.all([
+    generateText({
+      model: provider.getModel('debater'),
+      prompt: debaterPrompt,
+      temperature: 0.6,
+    }),
+    generateText({
+      model: provider.getModel('commentator'),
+      prompt: commentatorPrompt,
+      temperature: 0.8, // Grok gets more creative freedom
+    }),
+    generateText({
+      model: provider.getModel('referee'),
+      prompt: refereePrompt,
+      temperature: 0.4, // Referee is measured, consistent
+    }),
+  ])
+
+  // Parse results
+  const debaterData = parseJsonResponse(debaterResult.text) as {
+    rounds: Record<string, { attack: string; defense: string }>
+  }
+  const commentatorData = parseJsonResponse(commentatorResult.text) as {
+    intro: string
+    rounds: Record<string, { commentary: string }>
+  }
+  const refereeData = parseJsonResponse(refereeResult.text) as {
+    verdict: string
+  }
+
+  // Merge into unified ScreenplayDialogue
+  const mergedRounds: Record<number, { attack: string; defense: string; commentary: string }> = {}
+
+  for (const r of completedRounds) {
+    const rn = String(r.round_number)
+    mergedRounds[r.round_number] = {
+      attack: debaterData.rounds?.[rn]?.attack || '',
+      defense: debaterData.rounds?.[rn]?.defense || '',
+      commentary: commentatorData.rounds?.[rn]?.commentary || '',
+    }
+  }
+
+  return {
+    intro: commentatorData.intro || '',
+    rounds: mergedRounds,
+    verdict: refereeData.verdict || '',
+  }
+}
+
+/** Strip markdown code fences and parse JSON */
+function parseJsonResponse(text: string): unknown {
   const cleaned = text
     .replace(/^```(?:json)?\s*\n?/m, '')
     .replace(/\n?```\s*$/m, '')
-  return JSON.parse(cleaned) as ScreenplayDialogue
+  return JSON.parse(cleaned)
 }
 
 // ─── Prompt Builders ─────────────────────────────────────────────
