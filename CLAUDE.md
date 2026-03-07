@@ -32,6 +32,7 @@ npx supabase db push               # Apply migrations to remote
 | Axiom Extractor   | OpenAI      | `gpt-5.3`                     | Same model as debaters for consistency |
 | Referee / Judge   | Google      | `gemini-3.1-pro`               | Best at impartial multi-criteria eval  |
 | Synthesizer       | Google      | `gemini-3.1-pro`               | Same model as judge for consistency    |
+| Screenplay        | Google      | `gemini-3.1-pro`               | Cinematic dialogue (min: 3.1-pro/grok-4.2+) |
 | Commentator       | xAI Grok    | `grok-4.1-fast`                | Off-color, witty, edgy sports-style    |
 | Lightweight/Chat  | Google      | `gemini-3.1-flash`             | Fast, cheap tasks (NOT for judging)    |
 | Reader Chat       | Anthropic   | `claude-sonnet-4-20250514`     | Book Q&A for readers                   |
@@ -44,13 +45,10 @@ npx supabase db push               # Apply migrations to remote
 - `gpt-4o-mini`, `gpt-4o`, `gpt-4` — replaced by `gpt-5.3`
 - `grok-3-fast`, `grok-2` — replaced by `grok-4.1-fast`
 
-### Screenplay Generator — Role-Specific AI
-The screenplay generator (`src/lib/arena/screenplay-generator.ts`) uses EACH ROLE'S OWN AI to write dialogue:
-- **GPT-5.3** writes debater lines (formal, incisive) — temperature 0.6
-- **Grok 4.1** writes commentator lines (snarky, irreverent) — temperature 0.8
-- **Gemini 3.1 Pro** writes referee verdict (authoritative, measured) — temperature 0.4
+### Screenplay Generator — Gemini 3.1 Pro
+The screenplay generator (`src/lib/arena/screenplay-generator.ts`) uses **Gemini 3.1 Pro** (role: `screenplay`) to write ALL dialogue in one coherent pass — debaters, commentator, and referee voices. Minimum quality floor: `gemini-3.1-pro` or `grok-4.2+`. **NEVER use Flash or cheaper models for screenplay.**
 
-This ensures voice consistency between the debate engine and the cinematic video.
+LTX 2.3 handles all voice synthesis from the quoted dialogue.
 
 ### LTX Video 2.3 — Native Speech Synthesis
 LTX generates **video + lip-synced speech + ambient audio** natively from text prompts. Dialogue in quotation marks with accent/emotion markers → synthesized speech. **NO separate TTS system needed.** Never add TTS libraries (elevenlabs, cartesia, etc.).

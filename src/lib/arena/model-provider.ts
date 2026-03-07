@@ -9,6 +9,7 @@
 // │ Axiom Extractor    │ OpenAI               │ gpt-5.3                  │
 // │ Referee / Judge    │ Google Gemini         │ gemini-3.1-pro           │
 // │ Synthesizer        │ Google Gemini         │ gemini-3.1-pro           │
+// │ Screenplay         │ Google Gemini         │ gemini-3.1-pro           │
 // │ Commentator        │ xAI Grok             │ grok-4.1-fast            │
 // │ (fallback)         │ Google Gemini         │ gemini-3.1-flash         │
 // └────────────────────┴──────────────────────┴──────────────────────────┘
@@ -16,16 +17,14 @@
 // WHY THESE MODELS:
 //   GPT-5.3      — Best at structured argumentation and rhetorical depth
 //   Gemini 3.1 Pro — Best at impartial multi-criteria evaluation (judge)
+//                    AND cinematic screenplay generation (creative writing)
 //   Grok 4.1 Fast  — Off-color, witty, edgy sports-style commentary
 //
-// CINEMATIC VIDEO PIPELINE (LTX 2.3):
-//   LTX generates video + lip-synced speech + ambient audio natively.
-//   Dialogue in quotation marks → synthesized speech with accent/emotion.
-//   The screenplay generator uses EACH ROLE'S OWN AI to write its lines:
-//     • Grok writes commentator dialogue (snarky, irreverent)
-//     • GPT writes debater dialogue (formal, incisive)
-//     • Gemini Pro writes referee verdict (authoritative, measured)
-//   This ensures voice consistency between the debate and the video.
+// SCREENPLAY GENERATOR:
+//   Uses Gemini 3.1 Pro (minimum quality floor: gemini-3.1-pro or grok-4.2+).
+//   One LLM call generates ALL dialogue (debaters, commentator, referee)
+//   in one coherent screenplay. LTX 2.3 handles all voice synthesis —
+//   dialogue in quotation marks → lip-synced speech with accent/emotion.
 //
 // TO UPDATE MODELS: Change the MODEL_MAP below. Everything flows from here.
 // The screenplay generator imports getModel() — never hardcode model IDs elsewhere.
@@ -45,6 +44,7 @@ export type DebateRole =
   | 'commentator'
   | 'synthesizer'
   | 'axiom_extractor'
+  | 'screenplay'
 
 // Check if XAI API key is configured (non-empty)
 const isXAIConfigured = !!process.env.XAI_API_KEY
@@ -97,6 +97,7 @@ export class DefaultArenaModelProvider implements ArenaModelProvider {
         return 'openai'
       case 'referee':
       case 'synthesizer':
+      case 'screenplay':
         return 'gemini'
       case 'commentator':
         return 'grok'
