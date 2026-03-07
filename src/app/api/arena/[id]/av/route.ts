@@ -52,14 +52,14 @@ export async function POST(
   // Resolve author profiles (portraits + voice config)
   const db = getServiceClient()
   const [bookA, bookB] = await Promise.all([
-    db.from('books').select('author_id, authors(name)').eq('id', session.book_a_id).single(),
-    db.from('books').select('author_id, authors(name)').eq('id', session.book_b_id).single(),
+    db.from('books').select('author_id, authors(display_name)').eq('id', session.book_a_id).single(),
+    db.from('books').select('author_id, authors(display_name)').eq('id', session.book_b_id).single(),
   ])
 
   const authorAId = bookA.data?.author_id
   const authorBId = bookB.data?.author_id
-  const authorAName = (bookA.data?.authors as unknown as { name: string } | null)?.name || 'Author A'
-  const authorBName = (bookB.data?.authors as unknown as { name: string } | null)?.name || 'Author B'
+  const authorAName = (bookA.data?.authors as unknown as { display_name: string } | null)?.display_name || 'Author A'
+  const authorBName = (bookB.data?.authors as unknown as { display_name: string } | null)?.display_name || 'Author B'
 
   // Resolve portraits + voice profiles
   const { authorA, authorB } = await resolveDebateAuthorProfiles(

@@ -3,15 +3,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Play, Pause, Loader2, Flag, Trophy, Monitor, BarChart3, MessageSquare } from 'lucide-react'
+import { Play, Pause, Loader2, Flag, Trophy, BarChart3, MessageSquare } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { AxiomPanel } from './AxiomPanel'
 import { BattlefieldGraph } from './BattlefieldGraph'
-import { ShoutcasterTicker } from './ShoutcasterTicker'
 import { ArgumentLog } from './ArgumentLog'
-import { RoundIndicator } from './RoundIndicator'
 import { SynthesisPanel, type SynthesisResult } from './SynthesisPanel'
-import { FightingGameScoreboard } from './FightingGameScoreboard'
 import { BettingPanel } from './BettingPanel'
 import { SponsorChyron } from './SponsorChyron'
 import { AvatarVideo } from './AvatarVideo'
@@ -155,7 +152,6 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
   const [autoPlay, setAutoPlay] = useState(false)
   const [lastDamagedId, setLastDamagedId] = useState<string>()
   const [latestAttack, setLatestAttack] = useState<{ attackerSide: 'a' | 'b'; targetAxiomId: string } | null>(null)
-  const [viewMode, setViewMode] = useState<'video' | 'graph'>('video')
   const [shaking, setShaking] = useState(false)
   const [walletBalance, setWalletBalance] = useState(1000)
   const [userBet, setUserBet] = useState<{ side: 'a' | 'b'; amount: number; payout: number | null } | null>(null)
@@ -225,7 +221,6 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
             debaterB: data.sessions.debaterB,
           })
           setAvEnabled(true)
-          setViewMode('video')
 
           // Track IDs for cleanup — D-ID uses streamIds, Simli uses sessionIds
           if (backend === 'did') {
@@ -459,706 +454,488 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
   const latestCommentary = commentaries.length > 0 ? commentaries[commentaries.length - 1].text : null
 
   /* ═══════════════════════════════════════════════════════════════════════
-     LAYOUT — matches the user's wireframe exactly:
+     OXFORD UNION BROADCAST — Full-viewport cinematic debate video
 
-     ┌───────────┬─────────────────────────┬───────────┐
-     │ Comment.  │  Fighting Game Scoreboard│ Comment.  │
-     │    A      │                          │    B      │
-     │  (PiP)    │                          │  (PiP)    │
-     ├───────────┤                          ├───────────┤
-     │           │ ┌──────┬──────┬──────┐   │           │
-     │  Axiom    │ │Debat.│JUDGE │Debat.│   │  Axiom    │
-     │ Panel A   │ │A vid │      │B vid │   │  Panel B  │
-     │           │ └──────┴──────┴──────┘   │           │
-     ├───────────┴─────────────────────────┴───────────┤
-     │  [Controls] [Shoutcaster Ticker]                 │
-     │  [Battlefield/Graph] [Betting]                   │
-     ├──────────────────────────────────────────────────┤
-     │              Sponsor Chyron                       │
-     └──────────────────────────────────────────────────┘
+     Modeled after an actual Oxford Union debate broadcast:
+       - Full-screen split view of the two debaters
+       - Score/HP HUD overlaid at top
+       - Commentator picture-in-picture box
+       - Lower-third chyron with commentary + sponsor ticker
+       - Controls overlaid at bottom center
      ═══════════════════════════════════════════════════════════════════════ */
+
+  const [showAxiomDrawer, setShowAxiomDrawer] = useState(false)
+  const [showBettingDrawer, setShowBettingDrawer] = useState(false)
+  const [showArgumentLog, setShowArgumentLog] = useState(false)
 
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: ARENA_STYLES }} />
 
       <div
-        className="min-h-screen relative"
+        className="relative w-full overflow-hidden"
         style={{
+          height: '100vh',
+          background: '#000',
           animation: shaking ? 'arenaShake 0.5s ease-in-out' : 'none',
-          background: '#080604',
         }}
       >
         {/* ═══════════════════════════════════════════════════════════════
-            OXFORD UNION DEBATING CHAMBER BACKGROUND
-            Faithful to the Alfred Waterhouse 1878 chamber:
-            - Open timber roof with Morris grotesque patterns
-            - Dark oak paneling in vertical staves
-            - Gallery bookshelves belt
-            - Six-foil rose windows (Pre-Raphaelite stained glass)
-            - Gas-lamp warm candlelight from brass sconces
+            LAYER 0: Full-viewport split-screen debater portraits
             ═══════════════════════════════════════════════════════════════ */}
-        <div className="fixed inset-0 pointer-events-none z-0">
-
-          {/* Layer 1: Deep mahogany base */}
-          <div
-            className="absolute inset-0"
-            style={{
-              background: `
-                radial-gradient(ellipse 100% 60% at 50% 15%, #1f150b 0%, #150e07 30%, #0c0804 60%, #060402 100%)
-              `,
-            }}
-          />
-
-          {/* Layer 2: Vertical oak panel staves — the primary wood texture */}
-          <div
-            className="absolute inset-0"
-            style={{
-              opacity: 0.12,
-              backgroundImage: `
-                repeating-linear-gradient(
-                  90deg,
-                  transparent 0px,
-                  transparent 58px,
-                  rgba(139,90,43,0.5) 58px,
-                  rgba(101,67,33,0.3) 59px,
-                  rgba(139,90,43,0.6) 60px,
-                  rgba(101,67,33,0.2) 61px,
-                  transparent 62px
-                )
-              `,
-            }}
-          />
-
-          {/* Layer 3: Horizontal wood grain / wainscoting rails */}
-          <div
-            className="absolute inset-0"
-            style={{
-              opacity: 0.06,
-              backgroundImage: `
-                repeating-linear-gradient(
-                  0deg,
-                  transparent 0px,
-                  transparent 100px,
-                  rgba(139,90,43,0.4) 100px,
-                  rgba(139,90,43,0.4) 101px,
-                  transparent 102px,
-                  transparent 200px,
-                  rgba(101,67,33,0.3) 200px,
-                  rgba(101,67,33,0.3) 201px,
-                  transparent 202px
-                )
-              `,
-            }}
-          />
-
-          {/* Layer 4: Gallery bookshelf belt — darker band at ~55% height */}
-          <div
-            className="absolute left-0 right-0"
-            style={{
-              top: '50%',
-              height: '120px',
-              background: `linear-gradient(
-                180deg,
-                transparent 0%,
-                rgba(40,25,10,0.5) 15%,
-                rgba(30,18,8,0.7) 30%,
-                rgba(30,18,8,0.7) 70%,
-                rgba(40,25,10,0.5) 85%,
-                transparent 100%
-              )`,
-            }}
-          />
-          {/* Bookshelf horizontal rails */}
-          <div
-            className="absolute left-[5%] right-[5%]"
-            style={{
-              top: 'calc(50% + 10px)',
-              height: '1px',
-              background: 'linear-gradient(90deg, transparent, rgba(180,140,50,0.25), rgba(180,140,50,0.35), rgba(180,140,50,0.25), transparent)',
-            }}
-          />
-          <div
-            className="absolute left-[5%] right-[5%]"
-            style={{
-              top: 'calc(50% + 90px)',
-              height: '1px',
-              background: 'linear-gradient(90deg, transparent, rgba(180,140,50,0.2), rgba(180,140,50,0.3), rgba(180,140,50,0.2), transparent)',
-            }}
-          />
-
-          {/* Layer 5: Open timber roof — diagonal beams at top */}
-          <div
-            className="absolute top-0 left-0 right-0"
-            style={{
-              height: '25%',
-              opacity: 0.08,
-              backgroundImage: `
-                repeating-linear-gradient(
-                  30deg,
-                  transparent 0px,
-                  transparent 40px,
-                  rgba(101,67,33,0.6) 40px,
-                  rgba(139,90,43,0.4) 43px,
-                  transparent 44px
-                ),
-                repeating-linear-gradient(
-                  -30deg,
-                  transparent 0px,
-                  transparent 40px,
-                  rgba(101,67,33,0.6) 40px,
-                  rgba(139,90,43,0.4) 43px,
-                  transparent 44px
-                )
-              `,
-              animation: 'roofTimberShimmer 12s ease-in-out infinite',
-            }}
-          />
-
-          {/* Layer 6: Morris-style ceiling pattern (subtle foliage repeat) */}
-          <div
-            className="absolute top-0 left-0 right-0"
-            style={{
-              height: '20%',
-              opacity: 0.04,
-              backgroundImage: `
-                radial-gradient(circle 15px at 30px 30px, rgba(139,90,43,0.5) 0%, transparent 60%),
-                radial-gradient(circle 10px at 60px 15px, rgba(101,67,33,0.4) 0%, transparent 50%),
-                radial-gradient(circle 12px at 10px 50px, rgba(139,90,43,0.3) 0%, transparent 55%)
-              `,
-              backgroundSize: '80px 60px',
-              animation: 'morrisPattern 120s linear infinite',
-            }}
-          />
-
-          {/* Layer 7: Six-foil rose windows — two large circular windows */}
-          <div className="absolute" style={{ top: '8%', left: '8%', width: '80px', height: '80px', opacity: 0.07 }}>
-            <div
-              className="w-full h-full rounded-full"
-              style={{
-                background: 'radial-gradient(circle, rgba(180,60,60,0.4) 0%, rgba(60,120,60,0.3) 40%, rgba(40,80,160,0.2) 70%, transparent 100%)',
-                boxShadow: 'inset 0 0 20px rgba(212,175,55,0.3)',
-                border: '2px solid rgba(180,140,50,0.3)',
-              }}
+        <div className="absolute inset-0 grid grid-cols-2">
+          {/* ── LEFT: Debater A ─── */}
+          <div className="relative overflow-hidden" style={{ borderRight: '1px solid rgba(180,140,50,0.15)' }}>
+            <AvatarVideo
+              streamId={avSessions.debaterA?.streamId}
+              sessionId={avSessions.debaterA?.sessionId || null}
+              iceServers={avSessions.debaterA?.iceServers}
+              offer={avSessions.debaterA?.offer}
+              side="a"
+              fallbackLabel={bookA.author_name || bookA.title}
+              portraitUrl={avProfiles.authorA?.portraitUrl || bookA.portrait_url}
+              coverUrl={bookA.cover_url}
+              nationality={avProfiles.authorA?.nationality || bookA.nationality}
+              isActive={isActive}
+              isTTSSpeaking={tts.speaking && tts.activeRole === 'debater_a'}
+              avApiBase={avApiBase}
+              broadcast
             />
-          </div>
-          <div className="absolute" style={{ top: '8%', right: '8%', width: '80px', height: '80px', opacity: 0.07 }}>
-            <div
-              className="w-full h-full rounded-full"
-              style={{
-                background: 'radial-gradient(circle, rgba(60,60,180,0.4) 0%, rgba(60,120,60,0.3) 40%, rgba(160,60,40,0.2) 70%, transparent 100%)',
-                boxShadow: 'inset 0 0 20px rgba(212,175,55,0.3)',
-                border: '2px solid rgba(180,140,50,0.3)',
-              }}
-            />
+
+            {/* Name plate — lower left */}
+            <div className="absolute bottom-24 left-0 z-30">
+              <div
+                className="px-5 py-2.5"
+                style={{
+                  background: 'linear-gradient(90deg, rgba(180,20,20,0.85), rgba(180,20,20,0.6), transparent)',
+                  borderTop: '2px solid rgba(239,68,68,0.6)',
+                }}
+              >
+                <p className="text-sm font-black uppercase tracking-[0.15em] text-white">{bookA.author_name}</p>
+                <p className="text-[11px] text-red-200/80 italic">{bookA.title}</p>
+              </div>
+              {/* Model badge */}
+              <div
+                className="inline-block px-3 py-0.5 mt-px"
+                style={{ background: 'rgba(0,0,0,0.7)' }}
+              >
+                <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-orange-400">
+                  {modelA === 'claude' ? '⚡ Claude' : modelA === 'openai' ? '🤖 GPT' : modelA === 'gemini' ? '💎 Gemini' : `⚙️ ${modelA}`}
+                </span>
+              </div>
+            </div>
           </div>
 
-          {/* Layer 8: Brass gas-lamp sconces — warm pools of light */}
-          {[15, 35, 55, 75, 95].map((left) => (
-            <div
-              key={left}
-              className="absolute"
-              style={{
-                top: '30%',
-                left: `${left}%`,
-                width: '60px',
-                height: '120px',
-                transform: 'translateX(-50%)',
-                background: `radial-gradient(ellipse 50% 60% at 50% 20%, rgba(212,175,55,0.08) 0%, rgba(180,140,50,0.03) 40%, transparent 100%)`,
-                animation: 'candleFlicker 4s ease-in-out infinite',
-                animationDelay: `${left * 0.07}s`,
-              }}
+          {/* ── RIGHT: Debater B ─── */}
+          <div className="relative overflow-hidden" style={{ borderLeft: '1px solid rgba(180,140,50,0.15)' }}>
+            <AvatarVideo
+              streamId={avSessions.debaterB?.streamId}
+              sessionId={avSessions.debaterB?.sessionId || null}
+              iceServers={avSessions.debaterB?.iceServers}
+              offer={avSessions.debaterB?.offer}
+              side="b"
+              fallbackLabel={bookB.author_name || bookB.title}
+              portraitUrl={avProfiles.authorB?.portraitUrl || bookB.portrait_url}
+              coverUrl={bookB.cover_url}
+              nationality={avProfiles.authorB?.nationality || bookB.nationality}
+              isActive={isActive}
+              isTTSSpeaking={tts.speaking && tts.activeRole === 'debater_b'}
+              avApiBase={avApiBase}
+              broadcast
             />
-          ))}
 
-          {/* Layer 9: Two larger chandelier pools from ceiling */}
-          <div
-            className="absolute top-0 left-1/2 -translate-x-1/2"
-            style={{
-              width: '50%',
-              height: '35%',
-              background: 'radial-gradient(ellipse 80% 60% at 50% 0%, rgba(212,175,55,0.06) 0%, rgba(180,140,50,0.02) 50%, transparent 100%)',
-              animation: 'gasLampGlow 6s ease-in-out infinite',
-            }}
-          />
-          <div
-            className="absolute"
-            style={{
-              top: '5%',
-              left: '20%',
-              width: '25%',
-              height: '25%',
-              background: 'radial-gradient(ellipse at 50% 30%, rgba(212,175,55,0.04) 0%, transparent 70%)',
-              animation: 'candleFlicker 5s ease-in-out infinite',
-              animationDelay: '1s',
-            }}
-          />
-          <div
-            className="absolute"
-            style={{
-              top: '5%',
-              right: '20%',
-              width: '25%',
-              height: '25%',
-              background: 'radial-gradient(ellipse at 50% 30%, rgba(212,175,55,0.04) 0%, transparent 70%)',
-              animation: 'candleFlicker 5s ease-in-out infinite',
-              animationDelay: '2.5s',
-            }}
-          />
-
-          {/* Layer 10: Warm Pre-Raphaelite color wash — deep reds and greens */}
-          <div
-            className="absolute inset-0"
-            style={{
-              background: `
-                linear-gradient(135deg,
-                  rgba(120,30,20,0.03) 0%,
-                  transparent 25%,
-                  rgba(20,60,30,0.02) 50%,
-                  transparent 75%,
-                  rgba(30,20,80,0.02) 100%
-                )
-              `,
-            }}
-          />
-
-          {/* Layer 11: Heavy corner vignette — dramatic theatrical lighting */}
-          <div
-            className="absolute inset-0"
-            style={{
-              background: `
-                radial-gradient(ellipse 70% 65% at 50% 45%, transparent 40%, rgba(5,3,1,0.4) 70%, rgba(3,2,1,0.7) 100%)
-              `,
-            }}
-          />
-
-          {/* Layer 12: Bottom floor shadow — as if looking down from the gallery */}
-          <div
-            className="absolute bottom-0 left-0 right-0"
-            style={{
-              height: '15%',
-              background: 'linear-gradient(transparent, rgba(5,3,1,0.5))',
-            }}
-          />
+            {/* Name plate — lower right */}
+            <div className="absolute bottom-24 right-0 z-30 text-right">
+              <div
+                className="px-5 py-2.5"
+                style={{
+                  background: 'linear-gradient(270deg, rgba(20,60,180,0.85), rgba(20,60,180,0.6), transparent)',
+                  borderTop: '2px solid rgba(59,130,246,0.6)',
+                }}
+              >
+                <p className="text-sm font-black uppercase tracking-[0.15em] text-white">{bookB.author_name}</p>
+                <p className="text-[11px] text-blue-200/80 italic">{bookB.title}</p>
+              </div>
+              <div
+                className="inline-block px-3 py-0.5 mt-px"
+                style={{ background: 'rgba(0,0,0,0.7)' }}
+              >
+                <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-green-400">
+                  {modelB === 'openai' ? '🤖 GPT' : modelB === 'claude' ? '⚡ Claude' : modelB === 'gemini' ? '💎 Gemini' : `⚙️ ${modelB}`}
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
 
-        {/* ── Content (above background) ───────────────────────────── */}
-        <div className="relative z-10 mx-auto max-w-[1440px] px-3 py-3 xl:px-5">
+        {/* ── Center VS Emblem ─── */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 pointer-events-none">
+          <div className="relative">
+            <div
+              className="w-20 h-20 rounded-full flex items-center justify-center"
+              style={{
+                background: 'radial-gradient(circle, rgba(26,21,5,0.95) 0%, rgba(10,8,3,0.98) 100%)',
+                border: '2px solid rgba(180,140,50,0.4)',
+                boxShadow: '0 0 40px rgba(0,0,0,0.8), 0 0 20px rgba(180,140,50,0.1)',
+              }}
+            >
+              <span className="text-xl font-black text-amber-500/60" style={{ letterSpacing: '0.1em' }}>VS</span>
+            </div>
+            {/* Judge label below */}
+            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 text-center whitespace-nowrap">
+              <span className="text-[8px] font-bold uppercase tracking-[0.2em] text-amber-400/40">
+                ⚖️ Judged by Gemini
+              </span>
+            </div>
+          </div>
+        </div>
 
-          {/* Crucible Question Header */}
-          <div className="mb-3 text-center">
-            <p className="text-[9px] uppercase tracking-[0.4em] text-amber-800/60 mb-0.5"
-               style={{ fontVariant: 'small-caps', letterSpacing: '0.35em' }}>
+        {/* ═══════════════════════════════════════════════════════════════
+            LAYER 1: Top HUD — Score bar + Round indicator
+            ═══════════════════════════════════════════════════════════════ */}
+        <div className="absolute top-0 left-0 right-0 z-30">
+          {/* Oxford Union header */}
+          <div
+            className="text-center py-1.5"
+            style={{
+              background: 'linear-gradient(180deg, rgba(0,0,0,0.85), rgba(0,0,0,0.5), transparent)',
+            }}
+          >
+            <p className="text-[8px] uppercase tracking-[0.5em] text-amber-700/50" style={{ fontVariant: 'small-caps' }}>
               The Oxford Union &mdash; Ontological Pugilism
             </p>
-            <p className="text-sm text-amber-200/50 italic max-w-2xl mx-auto leading-relaxed">
+            <p className="text-[11px] text-amber-200/40 italic mt-0.5 max-w-xl mx-auto leading-snug px-4">
               &ldquo;{session.crucible_question}&rdquo;
             </p>
           </div>
 
-          {/* Winner Banner */}
-          <AnimatePresence>
-            {isCompleted && winnerBook && (
-              <motion.div
-                className="mb-3 rounded-lg p-3 text-center"
-                style={{
-                  background: 'linear-gradient(135deg, rgba(234,179,8,0.12), rgba(234,179,8,0.04))',
-                  border: '1px solid rgba(234,179,8,0.25)',
-                  boxShadow: '0 0 30px rgba(234,179,8,0.08)',
-                }}
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-              >
-                <Trophy className="mx-auto h-5 w-5 text-amber-400 mb-1" />
-                <p className="text-base font-bold text-amber-400">{winnerBook.title} Wins!</p>
-                <p className="text-[10px] text-zinc-500">Victory by {session.win_condition}</p>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* ═══════════════════════════════════════════════════════════
-               ROW 1 + ROW 2: The Main 3-Column Chamber
-               Left:   Commentator A (top) + Axiom Panel A (bottom)
-               Center: Scoreboard (top) + Debate Stage (bottom)
-               Right:  Commentator B (top) + Axiom Panel B (bottom)
-             ═══════════════════════════════════════════════════════════ */}
+          {/* Score HUD bar */}
           <div
-            className="grid gap-2 xl:gap-3"
-            style={{
-              gridTemplateColumns: 'minmax(180px, 220px) 1fr minmax(180px, 220px)',
-              gridTemplateRows: 'auto 1fr',
-            }}
+            className="mx-auto max-w-3xl px-4"
+            style={{ marginTop: '-2px' }}
           >
-            {/* ── [Row1, Col1] Commentator PiP ───────────────────── */}
-            <div className="row-span-1">
-              <CommentatorBooth
-                streamId={avSessions.commentator?.streamId}
-                sessionId={avSessions.commentator?.sessionId}
-                iceServers={avSessions.commentator?.iceServers}
-                offer={avSessions.commentator?.offer}
-                latestCommentary={latestCommentary}
-                position="inline"
-                compact
-                isTTSSpeaking={tts.speaking && tts.activeRole === 'commentator'}
-                avApiBase={avApiBase}
-              />
-            </div>
-
-            {/* ── [Row1, Col2] Fighting Game Scoreboard ────────────── */}
-            <div className="row-span-1">
-              <FightingGameScoreboard
-                bookA={bookA}
-                bookB={bookB}
-                modelA={modelA}
-                modelB={modelB}
-                hpA={hpPercentA}
-                hpB={hpPercentB}
-                currentRound={session.current_round}
-                maxRounds={session.max_rounds}
-                status={session.status}
-                winner={session.winner}
-              />
-            </div>
-
-            {/* ── [Row1, Col3] Commentator B PiP (Live Commentary) ── */}
-            <div className="row-span-1">
-              <div
-                className="rounded-lg border overflow-hidden h-full"
-                style={{
-                  background: 'linear-gradient(135deg, rgba(26,18,5,0.9), rgba(13,10,2,0.95))',
-                  borderColor: 'rgba(212,160,23,0.2)',
-                  boxShadow: '0 4px 16px rgba(0,0,0,0.4), 0 0 8px rgba(212,160,23,0.05)',
-                }}
-              >
-                <div
-                  className="px-2.5 py-1.5 flex items-center gap-1.5"
-                  style={{
-                    background: 'linear-gradient(90deg, rgba(212,160,23,0.08), transparent)',
-                    borderBottom: '1px solid rgba(212,160,23,0.12)',
-                  }}
-                >
-                  <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                  <MessageSquare className="w-3 h-3 text-amber-500/60" />
-                  <span className="text-[9px] font-black uppercase tracking-[0.15em] text-amber-500/70">
-                    Live Commentary
+            <div
+              className="flex items-center gap-0"
+              style={{
+                background: 'rgba(0,0,0,0.75)',
+                backdropFilter: 'blur(12px)',
+                borderRadius: '0 0 8px 8px',
+                border: '1px solid rgba(180,140,50,0.15)',
+                borderTop: 'none',
+                overflow: 'hidden',
+              }}
+            >
+              {/* Side A HP */}
+              <div className="flex-1 px-3 py-1.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-red-400 min-w-[50px]">
+                    {bookA.title.length > 12 ? bookA.title.slice(0, 12) + '…' : bookA.title}
                   </span>
-                </div>
-                <div className="p-2.5 overflow-hidden">
-                  {latestCommentary ? (
-                    <p className="text-[10px] leading-[1.5] text-zinc-400 line-clamp-6">
-                      {latestCommentary}
-                    </p>
-                  ) : (
-                    <p className="text-[10px] text-zinc-700 italic">Awaiting first exchange...</p>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* ── [Row2, Col1] Axiom Panel A ───────────────────────── */}
-            <div className="row-span-1 overflow-y-auto max-h-[480px]">
-              <AxiomPanel
-                side="a"
-                bookTitle={bookA.title}
-                authorName={bookA.author_name}
-                axioms={axiomsA}
-                lastDamagedId={lastDamagedId}
-                model={modelA}
-              />
-            </div>
-
-            {/* ── [Row2, Col2] Oxford Union Debate Stage ────────────── */}
-            <div className="row-span-1">
-              <div
-                className="relative rounded-xl overflow-hidden h-full"
-                style={{
-                  border: '1px solid rgba(139,90,43,0.2)',
-                  boxShadow: '0 8px 40px rgba(0,0,0,0.5), inset 0 0 60px rgba(139,90,43,0.03)',
-                  background: 'linear-gradient(180deg, rgba(26,18,10,0.6) 0%, rgba(13,9,4,0.8) 50%, rgba(8,6,3,0.9) 100%)',
-                  minHeight: '360px',
-                }}
-              >
-                {/* Stage floor wood texture */}
-                <div
-                  className="absolute inset-0 pointer-events-none opacity-[0.05]"
-                  style={{
-                    backgroundImage: `
-                      repeating-linear-gradient(90deg, transparent, transparent 60px, rgba(139,90,43,0.3) 60px, rgba(139,90,43,0.3) 61px),
-                      repeating-linear-gradient(0deg, transparent, transparent 120px, rgba(139,90,43,0.15) 120px, rgba(139,90,43,0.15) 121px)
-                    `,
-                  }}
-                />
-
-                {/* Overhead stage lighting */}
-                <div
-                  className="absolute top-0 left-1/2 -translate-x-1/2 w-3/4 h-32 pointer-events-none"
-                  style={{
-                    background: 'radial-gradient(ellipse at center top, rgba(212,160,23,0.06) 0%, transparent 80%)',
-                    animation: 'candleGlow 6s ease-in-out infinite',
-                  }}
-                />
-
-                {/* View Mode Toggle */}
-                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10">
-                  <div className="flex items-center gap-0.5 p-0.5 rounded-md bg-black/60 backdrop-blur-sm border border-[#27272a]/50">
-                    <button
-                      onClick={() => setViewMode('video')}
-                      className={`flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-bold transition-all ${
-                        viewMode === 'video' ? 'bg-amber-900/40 text-amber-300' : 'text-zinc-600 hover:text-zinc-400'
-                      }`}
-                    >
-                      <Monitor className="w-3 h-3" />
-                      Chamber
-                    </button>
-                    <button
-                      onClick={() => setViewMode('graph')}
-                      className={`flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-bold transition-all ${
-                        viewMode === 'graph' ? 'bg-amber-900/40 text-amber-300' : 'text-zinc-600 hover:text-zinc-400'
-                      }`}
-                    >
-                      <BarChart3 className="w-3 h-3" />
-                      Battlefield
-                    </button>
-                  </div>
-                </div>
-
-                {viewMode === 'video' ? (
-                  /* ── CHAMBER VIEW: Debater A | Judge | Debater B ─── */
-                  <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3 p-4 pt-12 h-full min-h-[360px]">
-                    {/* Debater A — Left podium */}
-                    <div className="flex flex-col items-center gap-2">
-                      <div className="w-full max-w-[260px]">
-                        <AvatarVideo
-                          streamId={avSessions.debaterA?.streamId}
-                          sessionId={avSessions.debaterA?.sessionId || null}
-                          iceServers={avSessions.debaterA?.iceServers}
-                          offer={avSessions.debaterA?.offer}
-                          side="a"
-                          fallbackLabel={bookA.author_name || bookA.title}
-                          portraitUrl={avProfiles.authorA?.portraitUrl || bookA.portrait_url}
-                          coverUrl={bookA.cover_url}
-                          nationality={avProfiles.authorA?.nationality || bookA.nationality}
-                          isActive={isActive}
-                          isTTSSpeaking={tts.speaking && tts.activeRole === 'debater_a'}
-                          avApiBase={avApiBase}
-                        />
-                      </div>
-                      <div
-                        className="px-4 py-1.5 rounded text-center"
-                        style={{
-                          background: 'linear-gradient(135deg, rgba(26,5,5,0.8), rgba(45,10,10,0.6))',
-                          border: '1px solid rgba(239,68,68,0.25)',
-                          boxShadow: '0 2px 8px rgba(239,68,68,0.1)',
-                        }}
-                      >
-                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-red-400">{bookA.title}</p>
-                        <p className="text-[8px] text-zinc-500">{bookA.author_name}</p>
-                      </div>
-                    </div>
-
-                    {/* Judge — Center (elevated) */}
-                    <div className="flex flex-col items-center gap-2 px-2">
-                      <div className="w-[110px] xl:w-[140px]">
-                        <div
-                          className="relative rounded-lg overflow-hidden"
-                          style={{
-                            border: '2px solid rgba(212,160,23,0.35)',
-                            boxShadow: '0 0 24px rgba(212,160,23,0.12)',
-                          }}
-                        >
-                          <div
-                            className="aspect-[3/4] flex flex-col items-center justify-center"
-                            style={{
-                              background: 'linear-gradient(180deg, rgba(26,21,5,0.9) 0%, rgba(15,13,5,0.95) 100%)',
-                            }}
-                          >
-                            <div className="text-3xl mb-1">&#x2696;&#xFE0F;</div>
-                            <span className="text-[9px] font-black uppercase tracking-[0.2em] text-amber-400/60">Judge</span>
-                            <span className="text-[8px] text-amber-400/40 mt-0.5">Gemini</span>
-                          </div>
-                        </div>
-                      </div>
-                      <div
-                        className="px-3 py-1 rounded text-center"
-                        style={{
-                          background: 'linear-gradient(135deg, rgba(26,21,5,0.6), rgba(13,10,2,0.4))',
-                          border: '1px solid rgba(212,160,23,0.15)',
-                        }}
-                      >
-                        <p className="text-[9px] font-bold uppercase tracking-[0.15em] text-amber-400/60">The Bench</p>
-                      </div>
-                    </div>
-
-                    {/* Debater B — Right podium */}
-                    <div className="flex flex-col items-center gap-2">
-                      <div className="w-full max-w-[260px]">
-                        <AvatarVideo
-                          streamId={avSessions.debaterB?.streamId}
-                          sessionId={avSessions.debaterB?.sessionId || null}
-                          iceServers={avSessions.debaterB?.iceServers}
-                          offer={avSessions.debaterB?.offer}
-                          side="b"
-                          fallbackLabel={bookB.author_name || bookB.title}
-                          portraitUrl={avProfiles.authorB?.portraitUrl || bookB.portrait_url}
-                          coverUrl={bookB.cover_url}
-                          nationality={avProfiles.authorB?.nationality || bookB.nationality}
-                          isActive={isActive}
-                          isTTSSpeaking={tts.speaking && tts.activeRole === 'debater_b'}
-                          avApiBase={avApiBase}
-                        />
-                      </div>
-                      <div
-                        className="px-4 py-1.5 rounded text-center"
-                        style={{
-                          background: 'linear-gradient(135deg, rgba(5,13,26,0.8), rgba(10,26,45,0.6))',
-                          border: '1px solid rgba(59,130,246,0.25)',
-                          boxShadow: '0 2px 8px rgba(59,130,246,0.1)',
-                        }}
-                      >
-                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-400">{bookB.title}</p>
-                        <p className="text-[8px] text-zinc-500">{bookB.author_name}</p>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  /* ── BATTLEFIELD VIEW: SVG visualization ─── */
-                  <div className="p-4 pt-12 min-h-[360px] flex items-center justify-center">
-                    <BattlefieldGraph
-                      axiomsA={axiomsA}
-                      axiomsB={axiomsB}
-                      latestAttack={latestAttack}
-                      collapsible
+                  <div className="flex-1 h-2.5 rounded-full overflow-hidden bg-red-950/50">
+                    <motion.div
+                      className="h-full rounded-full"
+                      style={{
+                        background: hpPercentA > 50
+                          ? 'linear-gradient(90deg, #22c55e, #4ade80)'
+                          : hpPercentA > 25
+                            ? 'linear-gradient(90deg, #eab308, #facc15)'
+                            : 'linear-gradient(90deg, #ef4444, #f87171)',
+                      }}
+                      animate={{ width: `${hpPercentA}%` }}
+                      transition={{ type: 'spring', stiffness: 120, damping: 20 }}
                     />
                   </div>
-                )}
+                  <span className="text-[10px] font-mono font-bold text-zinc-400 min-w-[35px] text-right">
+                    {Math.round(hpPercentA)}%
+                  </span>
+                </div>
+              </div>
+
+              {/* Round counter */}
+              <div
+                className="px-4 py-1 text-center"
+                style={{ borderLeft: '1px solid rgba(180,140,50,0.15)', borderRight: '1px solid rgba(180,140,50,0.15)' }}
+              >
+                <p className="text-[8px] uppercase tracking-[0.3em] text-amber-600/50">Round</p>
+                <p className="text-lg font-black text-amber-400 leading-none">
+                  {session.current_round}<span className="text-amber-700 text-xs">/{session.max_rounds}</span>
+                </p>
+              </div>
+
+              {/* Side B HP */}
+              <div className="flex-1 px-3 py-1.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono font-bold text-zinc-400 min-w-[35px]">
+                    {Math.round(hpPercentB)}%
+                  </span>
+                  <div className="flex-1 h-2.5 rounded-full overflow-hidden bg-blue-950/50">
+                    <motion.div
+                      className="h-full rounded-full float-right"
+                      style={{
+                        background: hpPercentB > 50
+                          ? 'linear-gradient(270deg, #22c55e, #4ade80)'
+                          : hpPercentB > 25
+                            ? 'linear-gradient(270deg, #eab308, #facc15)'
+                            : 'linear-gradient(270deg, #ef4444, #f87171)',
+                      }}
+                      animate={{ width: `${hpPercentB}%` }}
+                      transition={{ type: 'spring', stiffness: 120, damping: 20 }}
+                    />
+                  </div>
+                  <span className="text-[10px] font-black uppercase tracking-wider text-blue-400 min-w-[50px] text-right">
+                    {bookB.title.length > 12 ? bookB.title.slice(0, 12) + '…' : bookB.title}
+                  </span>
+                </div>
               </div>
             </div>
-
-            {/* ── [Row2, Col3] Axiom Panel B ───────────────────────── */}
-            <div className="row-span-1 overflow-y-auto max-h-[480px]">
-              <AxiomPanel
-                side="b"
-                bookTitle={bookB.title}
-                authorName={bookB.author_name}
-                axioms={axiomsB}
-                lastDamagedId={lastDamagedId}
-                model={modelB}
-              />
-            </div>
           </div>
+        </div>
 
-          {/* ═══════════════════════════════════════════════════════════
-               ROW 3: Controls + Shoutcaster Ticker
-             ═══════════════════════════════════════════════════════════ */}
-          <div className="mt-3 space-y-2">
-            {/* Controls bar */}
-            {isOwner && isActive && (
-              <div className="flex items-center justify-center gap-2">
-                <Button
-                  onClick={executeNextRound}
-                  disabled={executing || session.current_round >= session.max_rounds}
-                  size="sm"
-                  className="bg-amber-700 hover:bg-amber-600 text-white border border-amber-600/30"
-                >
-                  {executing ? (
-                    <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />Executing...</>
-                  ) : (
-                    <><Play className="mr-1.5 h-3.5 w-3.5" />Next Round</>
-                  )}
-                </Button>
-                <Button
-                  onClick={() => setAutoPlay(!autoPlay)}
-                  variant="outline"
-                  size="sm"
-                  className={autoPlay ? 'border-green-500 text-green-400' : 'border-zinc-700 text-zinc-400'}
-                >
-                  {autoPlay ? <><Pause className="mr-1.5 h-3.5 w-3.5" />Auto</> : 'Auto-Play'}
-                </Button>
-                <Button
-                  onClick={() => handleAction('abandon')}
-                  variant="outline"
-                  size="sm"
-                  className="text-red-400 border-red-500/30 hover:bg-red-500/10"
-                >
-                  <Flag className="mr-1.5 h-3.5 w-3.5" />
-                  Forfeit
-                </Button>
+        {/* ═══════════════════════════════════════════════════════════════
+            LAYER 2: Winner overlay
+            ═══════════════════════════════════════════════════════════════ */}
+        <AnimatePresence>
+          {isCompleted && winnerBook && (
+            <motion.div
+              className="absolute inset-0 z-40 flex items-center justify-center"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              style={{ background: 'rgba(0,0,0,0.6)' }}
+            >
+              <motion.div
+                className="text-center"
+                initial={{ scale: 0.5, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ type: 'spring', stiffness: 100, damping: 15, delay: 0.3 }}
+              >
+                <Trophy className="mx-auto h-16 w-16 text-amber-400 mb-4" />
+                <p className="text-4xl font-black text-amber-400 uppercase tracking-wider">{winnerBook.title}</p>
+                <p className="text-xl text-amber-300/60 uppercase tracking-[0.3em] mt-2">Wins</p>
+                <p className="text-sm text-zinc-500 mt-3">Victory by {session.win_condition}</p>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ═══════════════════════════════════════════════════════════════
+            LAYER 3: Commentator PiP box (top-left)
+            ═══════════════════════════════════════════════════════════════ */}
+        <div className="absolute top-28 left-4 z-30 w-48">
+          <CommentatorBooth
+            streamId={avSessions.commentator?.streamId}
+            sessionId={avSessions.commentator?.sessionId}
+            iceServers={avSessions.commentator?.iceServers}
+            offer={avSessions.commentator?.offer}
+            latestCommentary={latestCommentary}
+            position="inline"
+            compact
+            isTTSSpeaking={tts.speaking && tts.activeRole === 'commentator'}
+            avApiBase={avApiBase}
+          />
+        </div>
+
+        {/* ═══════════════════════════════════════════════════════════════
+            LAYER 4: Bottom — Controls + Commentary Lower-Third + Chyron
+            ═══════════════════════════════════════════════════════════════ */}
+        <div className="absolute bottom-0 left-0 right-0 z-30">
+          {/* Controls bar */}
+          {isOwner && isActive && (
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <Button
+                onClick={executeNextRound}
+                disabled={executing || session.current_round >= session.max_rounds}
+                size="sm"
+                className="bg-amber-700/90 hover:bg-amber-600 text-white border border-amber-600/30 backdrop-blur-sm"
+              >
+                {executing ? (
+                  <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />Executing...</>
+                ) : (
+                  <><Play className="mr-1.5 h-3.5 w-3.5" />Next Round</>
+                )}
+              </Button>
+              <Button
+                onClick={() => setAutoPlay(!autoPlay)}
+                variant="outline"
+                size="sm"
+                className={`backdrop-blur-sm ${autoPlay ? 'border-green-500 text-green-400 bg-green-950/50' : 'border-zinc-700 text-zinc-400 bg-black/50'}`}
+              >
+                {autoPlay ? <><Pause className="mr-1.5 h-3.5 w-3.5" />Auto</> : 'Auto-Play'}
+              </Button>
+              <Button
+                onClick={() => handleAction('abandon')}
+                variant="outline"
+                size="sm"
+                className="text-red-400 border-red-500/30 hover:bg-red-500/10 bg-black/50 backdrop-blur-sm"
+              >
+                <Flag className="mr-1.5 h-3.5 w-3.5" />
+                Forfeit
+              </Button>
+            </div>
+          )}
+
+          {/* Commentary lower-third */}
+          <div
+            className="px-6 py-2"
+            style={{
+              background: 'linear-gradient(180deg, transparent, rgba(0,0,0,0.8) 30%, rgba(0,0,0,0.9))',
+            }}
+          >
+            {latestCommentary && (
+              <div className="max-w-4xl mx-auto mb-1.5">
+                <div className="flex items-start gap-3">
+                  <div className="flex items-center gap-1 shrink-0 mt-0.5">
+                    <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                    <span className="text-[8px] font-black uppercase tracking-[0.2em] text-amber-500/60">Commentary</span>
+                  </div>
+                  <motion.p
+                    key={latestCommentary.slice(0, 20)}
+                    className="text-xs text-zinc-300 leading-relaxed line-clamp-2"
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.5 }}
+                  >
+                    {latestCommentary}
+                  </motion.p>
+                </div>
               </div>
             )}
 
-            {/* Shoutcaster Ticker */}
-            <ShoutcasterTicker
-              commentaries={commentaries}
-              modelAttribution={{ referee: 'Gemini', commentator: 'Grok' }}
-            />
-          </div>
-
-          {/* ═══════════════════════════════════════════════════════════
-               ROW 4: Battlefield/Graph + Betting Panel
-             ═══════════════════════════════════════════════════════════ */}
-          <div className="mt-3 grid grid-cols-1 xl:grid-cols-[1fr_300px] gap-3">
-            {/* Battlefield Graph or Argument Log */}
-            <div>
-              {viewMode === 'video' && (
-                <div className="mb-3">
-                  <BattlefieldGraph
-                    axiomsA={axiomsA}
-                    axiomsB={axiomsB}
-                    latestAttack={latestAttack}
-                    collapsible
-                  />
-                </div>
-              )}
-              <ArgumentLog
-                rounds={rounds}
-                args={args}
-                bookATitle={bookA.title}
-                bookBTitle={bookB.title}
-              />
-            </div>
-
-            {/* Betting Panel */}
-            <div className="space-y-3">
-              <BettingPanel
-                sessionId={session.id}
-                pool={state.pool || null}
-                bookATitle={bookA.title}
-                bookBTitle={bookB.title}
-                walletBalance={walletBalance}
-                userBet={userBet}
-                onPlaceBet={handlePlaceBet}
-              />
-              <RoundIndicator
-                currentRound={session.current_round}
-                maxRounds={session.max_rounds}
-                status={session.status}
-              />
-            </div>
-          </div>
-
-          {/* ═══════════════════════════════════════════════════════════
-               ROW 5: Sponsor Chyron
-             ═══════════════════════════════════════════════════════════ */}
-          <div className="mt-3">
+            {/* Sponsor chyron ticker */}
             <SponsorChyron
               sponsors={state.sponsors || []}
               modelAttribution={{ referee: 'Gemini', commentator: 'Grok' }}
             />
           </div>
-
-          {/* Synthesis (post-fight) */}
-          {isCompleted && (
-            <div className="mt-4">
-              <SynthesisPanel
-                sessionId={session.id}
-                synthesis={session.synthesis as SynthesisResult | null}
-                bookATitle={bookA.title}
-                bookBTitle={bookB.title}
-                winner={session.winner}
-              />
-            </div>
-          )}
         </div>
+
+        {/* ═══════════════════════════════════════════════════════════════
+            LAYER 5: Floating drawer toggle buttons (right edge)
+            ═══════════════════════════════════════════════════════════════ */}
+        <div className="absolute top-1/2 right-2 -translate-y-1/2 z-30 flex flex-col gap-2">
+          <button
+            onClick={() => { setShowAxiomDrawer(!showAxiomDrawer); setShowBettingDrawer(false); setShowArgumentLog(false) }}
+            className={`p-2 rounded-lg backdrop-blur-sm transition-all ${
+              showAxiomDrawer ? 'bg-amber-900/60 border-amber-600/50' : 'bg-black/60 border-zinc-800/50 hover:bg-black/80'
+            } border`}
+            title="Axiom Health"
+          >
+            <BarChart3 className="w-4 h-4 text-amber-400" />
+          </button>
+          <button
+            onClick={() => { setShowBettingDrawer(!showBettingDrawer); setShowAxiomDrawer(false); setShowArgumentLog(false) }}
+            className={`p-2 rounded-lg backdrop-blur-sm transition-all ${
+              showBettingDrawer ? 'bg-amber-900/60 border-amber-600/50' : 'bg-black/60 border-zinc-800/50 hover:bg-black/80'
+            } border`}
+            title="Betting"
+          >
+            <span className="text-sm">🎰</span>
+          </button>
+          <button
+            onClick={() => { setShowArgumentLog(!showArgumentLog); setShowAxiomDrawer(false); setShowBettingDrawer(false) }}
+            className={`p-2 rounded-lg backdrop-blur-sm transition-all ${
+              showArgumentLog ? 'bg-amber-900/60 border-amber-600/50' : 'bg-black/60 border-zinc-800/50 hover:bg-black/80'
+            } border`}
+            title="Argument Log"
+          >
+            <MessageSquare className="w-4 h-4 text-amber-400" />
+          </button>
+        </div>
+
+        {/* ═══════════════════════════════════════════════════════════════
+            LAYER 6: Slide-out drawers
+            ═══════════════════════════════════════════════════════════════ */}
+        <AnimatePresence>
+          {showAxiomDrawer && (
+            <motion.div
+              className="absolute top-24 right-12 bottom-28 z-30 w-[520px] overflow-y-auto"
+              initial={{ opacity: 0, x: 60 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 60 }}
+              transition={{ type: 'spring', stiffness: 200, damping: 25 }}
+            >
+              <div
+                className="rounded-xl p-3 space-y-3 h-full overflow-y-auto"
+                style={{
+                  background: 'rgba(10,8,5,0.92)',
+                  backdropFilter: 'blur(20px)',
+                  border: '1px solid rgba(180,140,50,0.15)',
+                  boxShadow: '0 8px 40px rgba(0,0,0,0.6)',
+                }}
+              >
+                <div className="grid grid-cols-2 gap-3">
+                  <AxiomPanel side="a" bookTitle={bookA.title} authorName={bookA.author_name} axioms={axiomsA} lastDamagedId={lastDamagedId} model={modelA} />
+                  <AxiomPanel side="b" bookTitle={bookB.title} authorName={bookB.author_name} axioms={axiomsB} lastDamagedId={lastDamagedId} model={modelB} />
+                </div>
+                <BattlefieldGraph axiomsA={axiomsA} axiomsB={axiomsB} latestAttack={latestAttack} collapsible />
+              </div>
+            </motion.div>
+          )}
+
+          {showBettingDrawer && (
+            <motion.div
+              className="absolute top-24 right-12 z-30 w-[300px]"
+              initial={{ opacity: 0, x: 60 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 60 }}
+              transition={{ type: 'spring', stiffness: 200, damping: 25 }}
+            >
+              <div
+                className="rounded-xl p-3 space-y-3"
+                style={{
+                  background: 'rgba(10,8,5,0.92)',
+                  backdropFilter: 'blur(20px)',
+                  border: '1px solid rgba(180,140,50,0.15)',
+                  boxShadow: '0 8px 40px rgba(0,0,0,0.6)',
+                }}
+              >
+                <BettingPanel
+                  sessionId={session.id}
+                  pool={state.pool || null}
+                  bookATitle={bookA.title}
+                  bookBTitle={bookB.title}
+                  walletBalance={walletBalance}
+                  userBet={userBet}
+                  onPlaceBet={handlePlaceBet}
+                />
+              </div>
+            </motion.div>
+          )}
+
+          {showArgumentLog && (
+            <motion.div
+              className="absolute top-24 right-12 bottom-28 z-30 w-[400px] overflow-y-auto"
+              initial={{ opacity: 0, x: 60 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 60 }}
+              transition={{ type: 'spring', stiffness: 200, damping: 25 }}
+            >
+              <div
+                className="rounded-xl p-3 h-full overflow-y-auto"
+                style={{
+                  background: 'rgba(10,8,5,0.92)',
+                  backdropFilter: 'blur(20px)',
+                  border: '1px solid rgba(180,140,50,0.15)',
+                  boxShadow: '0 8px 40px rgba(0,0,0,0.6)',
+                }}
+              >
+                <ArgumentLog rounds={rounds} args={args} bookATitle={bookA.title} bookBTitle={bookB.title} />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Synthesis overlay (post-fight) */}
+        {isCompleted && !winnerBook && (
+          <div className="absolute bottom-32 left-1/2 -translate-x-1/2 z-30 w-full max-w-3xl px-4">
+            <SynthesisPanel
+              sessionId={session.id}
+              synthesis={session.synthesis as SynthesisResult | null}
+              bookATitle={bookA.title}
+              bookBTitle={bookB.title}
+              winner={session.winner}
+            />
+          </div>
+        )}
       </div>
     </>
   )

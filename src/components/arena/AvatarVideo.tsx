@@ -28,6 +28,8 @@ interface AvatarVideoProps {
   nationality?: string | null
   /** D-ID API base URL for SDP/ICE relay */
   avApiBase?: string
+  /** Broadcast mode — full-bleed, no frame, fills parent container */
+  broadcast?: boolean
 }
 
 /**
@@ -54,6 +56,7 @@ export function AvatarVideo({
   isTTSSpeaking = false,
   nationality,
   avApiBase,
+  broadcast = false,
 }: AvatarVideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
@@ -198,6 +201,143 @@ export function AvatarVideo({
   const isConnected = connectionState === 'connected'
   const showVideo = streamId && isConnected
 
+  // ── BROADCAST MODE: full-bleed, no frame, fills parent ─────────────
+  if (broadcast) {
+    return (
+      <div className="absolute inset-0 overflow-hidden">
+        {/* D-ID WebRTC video (full-bleed) */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className={`absolute inset-0 w-full h-full object-cover ${showVideo ? '' : 'hidden'}`}
+          style={{ filter: 'contrast(1.05) saturate(1.1) sepia(0.03)' }}
+        />
+        <audio ref={audioRef} autoPlay />
+
+        {/* Portrait / Cover fallback (full-bleed) */}
+        {!showVideo && (
+          <div className="absolute inset-0">
+            {displayImage ? (
+              <>
+                <motion.img
+                  src={displayImage}
+                  alt={fallbackLabel}
+                  className="w-full h-full object-cover"
+                  animate={speaking ? {
+                    scale: [1, 1.008, 1.003, 1.006, 1],
+                    rotateY: [0, 0.3, -0.2, 0.15, 0],
+                  } : isActive ? {
+                    scale: [1, 1.004, 1],
+                  } : {}}
+                  transition={speaking ? {
+                    duration: 3,
+                    repeat: Infinity,
+                    ease: 'easeInOut',
+                  } : { duration: 5, repeat: Infinity, ease: 'easeInOut' }}
+                  style={{
+                    filter: speaking
+                      ? 'brightness(1.1) saturate(1.15) contrast(1.05)'
+                      : isActive
+                        ? 'brightness(0.75) saturate(0.85) sepia(0.08)'
+                        : 'brightness(0.55) saturate(0.65) sepia(0.15)',
+                    transition: 'filter 0.6s ease',
+                  }}
+                />
+                {/* Dramatic cinematic vignette */}
+                <div
+                  className="absolute inset-0"
+                  style={{
+                    background: `
+                      radial-gradient(ellipse 90% 80% at 50% 30%, transparent 20%, rgba(0,0,0,0.5) 100%),
+                      linear-gradient(180deg, rgba(0,0,0,0.3) 0%, transparent 25%, transparent 60%, rgba(0,0,0,0.6) 100%)
+                    `,
+                  }}
+                />
+                {/* Side-colored glow when speaking */}
+                <AnimatePresence>
+                  {speaking && (
+                    <motion.div
+                      className="absolute inset-0 pointer-events-none"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: [0.1, 0.25, 0.1] }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }}
+                      style={{
+                        background: side === 'a'
+                          ? 'radial-gradient(ellipse at 50% 50%, rgba(201,53,53,0.3), transparent 70%)'
+                          : 'radial-gradient(ellipse at 50% 50%, rgba(45,107,196,0.3), transparent 70%)',
+                      }}
+                    />
+                  )}
+                </AnimatePresence>
+              </>
+            ) : (
+              /* No image: large initial letter */
+              <div
+                className="w-full h-full flex items-center justify-center"
+                style={{
+                  background: side === 'a'
+                    ? 'radial-gradient(ellipse at 50% 40%, #2d1212, #1a0808, #0a0404)'
+                    : 'radial-gradient(ellipse at 50% 40%, #0d1a2d, #081018, #040810)',
+                }}
+              >
+                <span
+                  className="font-serif font-bold"
+                  style={{
+                    fontSize: 'min(200px, 25vw)',
+                    color: sideColor,
+                    opacity: 0.12,
+                    textShadow: `0 0 80px ${sideGlow}`,
+                  }}
+                >
+                  {fallbackLabel.charAt(0)}
+                </span>
+              </div>
+            )}
+
+            {/* Audio waveform when speaking */}
+            <AnimatePresence>
+              {speaking && (
+                <motion.div
+                  className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 0.8 }}
+                  exit={{ opacity: 0 }}
+                >
+                  <canvas ref={canvasRef} width={200} height={60} className="w-full h-full" />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        )}
+
+        {/* LIVE badge */}
+        {showVideo && (
+          <div className="absolute top-4 left-4 z-20 flex items-center gap-2 px-3 py-1 rounded"
+            style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)' }}
+          >
+            <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-red-400">LIVE</span>
+          </div>
+        )}
+
+        {/* Nationality badge */}
+        {nationality && (
+          <div className="absolute top-4 right-4 z-20 px-2 py-1 rounded"
+            style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)' }}
+          >
+            <span className="text-[8px] font-bold uppercase tracking-[0.15em] text-amber-400/70">
+              {nationality}
+            </span>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ── FRAME MODE (default): Gothic ornamental frame ──────────────────
   return (
     <div className="relative w-full">
       {/* ── Gothic ornamental frame ─── */}
