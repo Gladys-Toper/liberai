@@ -6,14 +6,14 @@
 // into an array of SceneChunks, each with a rich video prompt for LTX 2.3.
 //
 // Target video length: 2-3 minutes depending on round count.
-// Structure per round: attack+defense merged (18s) + commentary (10s) = 28s/round
-// Plus establishing+intro merged (20s via generateFirst) + verdict (10s) = 30s overhead
-// Chunk count: 1 + 2*rounds + 1 → 5 rounds = 12 chunks (vs 17 at 10s each)
-// 5 rounds → 170s (~3 min), 7 rounds → 226s (~4 min)
+// Structure per round: attack+defense merged (18s via extend) + commentary (10s) = 28s/round
+// Plus establishing (10s via generateFirst) + intro (10s via extend) + verdict (10s) = 30s
+// Chunk count: 2 + 2*rounds + 1 → 5 rounds = 13 chunks (vs 17 at 10s each)
+// 5 rounds → 178s (~3 min), 7 rounds → 234s (~4 min)
 //
-// NOTE: LTX extend has a 505-frame limit (context + duration at 24fps).
-// We use 18s (432 frames) for extend calls, leaving ~3s (73 frames) for context.
-// generateFirst has no context constraint, so the establishing shot uses 20s.
+// NOTE: ltx-2-3-pro text-to-video (generateFirst) caps at 10s.
+// ltx-2-3-pro extend supports up to 20s, but we use 18s (432 frames)
+// to leave ~3s (73 frames) for context within the 505-frame limit.
 //
 // IMPORTANT: Because we use LTX's extend endpoint, each chunk (after the first)
 // describes what happens NEXT — a continuation from the previous scene's last frame.
@@ -90,14 +90,28 @@ export async function generateScreenplay(
   const maxHpA = axiomsA.length * 100
   const maxHpB = axiomsB.length * 100
 
-  // ── Scene 1: Establishing + Commentator intro merged (20s, generateFirst) ──
+  // ── Scene 1: Establishing shot (10s, generateFirst — ltx-2-3-pro caps at 10s) ──
   chunks.push({
     index: chunkIndex++,
-    durationSeconds: 20,
+    durationSeconds: 10,
     roundNumber: 0,
     sceneType: 'establishing',
-    videoPrompt: buildEstablishingPrompt() + '\n\n' + buildIntroContinuation(transcript, dialogue.intro),
+    videoPrompt: buildEstablishingPrompt(),
     cameraMotion: 'dolly_in',
+    hpA: totalHp(axiomsA),
+    hpB: totalHp(axiomsB),
+    hpPercentA: 100,
+    hpPercentB: 100,
+  })
+
+  // ── Scene 2: Commentator intro (10s, extend) ──
+  chunks.push({
+    index: chunkIndex++,
+    durationSeconds: 10,
+    roundNumber: 0,
+    sceneType: 'intro',
+    videoPrompt: buildIntroContinuation(transcript, dialogue.intro),
+    cameraMotion: 'pan_right',
     hpA: totalHp(axiomsA),
     hpB: totalHp(axiomsB),
     hpPercentA: 100,
