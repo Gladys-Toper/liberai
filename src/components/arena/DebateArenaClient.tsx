@@ -157,6 +157,7 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
   const [videoDurationSeconds, setVideoDurationSeconds] = useState(0)
   const [showCinematic, setShowCinematic] = useState(false)
   const [posterUrl, setPosterUrl] = useState<string | null>(null)
+  const [videoCheckDone, setVideoCheckDone] = useState(initialState.session.status !== 'completed')
   const stallCountRef = useRef(0)
   const lastProgressRef = useRef(0)
 
@@ -237,7 +238,9 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
         } else if (data.status === 'failed') {
           setVideoStatus('failed')
         }
-      } catch { /* video check optional */ }
+      } catch { /* video check optional */ } finally {
+        setVideoCheckDone(true)
+      }
     }
     if (session.status === 'completed') {
       checkVideo()
@@ -856,7 +859,7 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
           )}
 
           {/* ── Standard winner overlay (non-generating states) ── */}
-          {isCompleted && winnerBook && videoStatus !== 'generating' && (
+          {isCompleted && videoCheckDone && winnerBook && videoStatus !== 'generating' && (
             <motion.div
               className="absolute inset-0 z-40 flex items-center justify-center"
               initial={{ opacity: 0 }}
@@ -1108,8 +1111,8 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
           )}
         </AnimatePresence>
 
-        {/* Synthesis overlay (post-fight) */}
-        {isCompleted && !winnerBook && (
+        {/* Synthesis overlay (post-fight) — hidden during video generation */}
+        {isCompleted && videoCheckDone && !winnerBook && videoStatus !== 'generating' && (
           <div className="absolute bottom-32 left-1/2 -translate-x-1/2 z-30 w-full max-w-3xl px-4">
             <SynthesisPanel
               sessionId={session.id}
@@ -1122,7 +1125,7 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
         )}
 
         {/* Cinematic replay button for draw outcomes (no winnerBook) */}
-        {isCompleted && !winnerBook && (
+        {isCompleted && videoCheckDone && !winnerBook && videoStatus !== 'generating' && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40">
             {videoStatus === 'complete' && videoUrl ? (
               <button
