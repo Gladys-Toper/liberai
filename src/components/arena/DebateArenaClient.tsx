@@ -741,8 +741,8 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
             LAYER 2: Winner / Fight-poster wait screen overlay
             ═══════════════════════════════════════════════════════════════ */}
         <AnimatePresence>
-          {/* ── Full-bleed fight poster wait screen (during video gen) ── */}
-          {isCompleted && videoStatus === 'generating' && (
+          {/* ── Full-bleed fight poster wait screen (during video gen or failed) ── */}
+          {isCompleted && (videoStatus === 'generating' || videoStatus === 'failed') && (
             <motion.div
               className="absolute inset-0 z-40"
               initial={{ opacity: 0 }}
@@ -791,7 +791,7 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
                 </div>
               )}
 
-              {/* ── Bottom progress bar overlay ── */}
+              {/* ── Bottom progress bar / retry overlay ── */}
               <div
                 className="absolute bottom-0 left-0 right-0 z-50 px-6 py-4"
                 style={{
@@ -799,30 +799,57 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
                 }}
               >
                 <div className="max-w-2xl mx-auto">
-                  <div className="flex items-center gap-3 mb-2">
-                    <Loader2 className="w-4 h-4 text-amber-400 animate-spin shrink-0" />
-                    <span className="text-sm font-bold text-amber-400">
-                      Rendering {videoDurationSeconds > 0 ? `${Math.round(videoDurationSeconds / 60)} min` : ''} cinematic replay…
-                    </span>
-                    <span className="text-[11px] text-zinc-500 ml-auto">
-                      {videoEstimatedSeconds > 60
-                        ? `~${Math.ceil(videoEstimatedSeconds / 60)} min remaining`
-                        : videoEstimatedSeconds > 0
-                          ? `~${videoEstimatedSeconds}s remaining`
-                          : 'Starting pipeline…'}
-                    </span>
-                  </div>
-                  <div className="h-1.5 rounded-full bg-amber-950/60 overflow-hidden">
-                    <motion.div
-                      className="h-full rounded-full bg-gradient-to-r from-amber-600 to-amber-400"
-                      animate={{ width: `${videoTotal > 0 ? (videoProgress / videoTotal) * 100 : 5}%` }}
-                      transition={{ type: 'spring', stiffness: 60, damping: 20 }}
-                    />
-                  </div>
-                  {videoTotal > 0 && (
-                    <p className="text-[10px] text-zinc-600 mt-1">
-                      {videoProgress}/{videoTotal} chunks rendered
-                    </p>
+                  {videoStatus === 'failed' ? (
+                    /* ── Failed state: show progress so far + retry button ── */
+                    <div className="text-center">
+                      <div className="flex items-center justify-center gap-3 mb-3">
+                        <span className="text-sm font-bold text-red-400">
+                          Pipeline interrupted — {videoProgress}/{videoTotal} chunks rendered
+                        </span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-amber-950/60 overflow-hidden mb-3">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-red-600 to-red-400"
+                          style={{ width: `${videoTotal > 0 ? (videoProgress / videoTotal) * 100 : 0}%` }}
+                        />
+                      </div>
+                      <button
+                        onClick={generateCinematicVideo}
+                        className="px-5 py-2.5 rounded-lg font-bold uppercase tracking-wider text-sm text-amber-400 border border-amber-500/40 bg-amber-950/40 hover:bg-amber-950/70 transition-all"
+                      >
+                        <Film className="inline-block w-4 h-4 mr-2 -mt-0.5" />
+                        Retry Cinematic Replay
+                      </button>
+                    </div>
+                  ) : (
+                    /* ── Generating state: progress bar + time estimate ── */
+                    <>
+                      <div className="flex items-center gap-3 mb-2">
+                        <Loader2 className="w-4 h-4 text-amber-400 animate-spin shrink-0" />
+                        <span className="text-sm font-bold text-amber-400">
+                          Rendering {videoDurationSeconds > 0 ? `${Math.round(videoDurationSeconds / 60)} min` : ''} cinematic replay…
+                        </span>
+                        <span className="text-[11px] text-zinc-500 ml-auto">
+                          {videoEstimatedSeconds > 60
+                            ? `~${Math.ceil(videoEstimatedSeconds / 60)} min remaining`
+                            : videoEstimatedSeconds > 0
+                              ? `~${videoEstimatedSeconds}s remaining`
+                              : 'Starting pipeline…'}
+                        </span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-amber-950/60 overflow-hidden">
+                        <motion.div
+                          className="h-full rounded-full bg-gradient-to-r from-amber-600 to-amber-400"
+                          animate={{ width: `${videoTotal > 0 ? (videoProgress / videoTotal) * 100 : 5}%` }}
+                          transition={{ type: 'spring', stiffness: 60, damping: 20 }}
+                        />
+                      </div>
+                      {videoTotal > 0 && (
+                        <p className="text-[10px] text-zinc-600 mt-1">
+                          {videoProgress}/{videoTotal} chunks rendered
+                        </p>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -912,7 +939,7 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
         </AnimatePresence>
 
         {/* Ken Burns CSS keyframe animation (global style for poster zoom) */}
-        {videoStatus === 'generating' && posterUrl && (
+        {(videoStatus === 'generating' || videoStatus === 'failed') && posterUrl && (
           <style dangerouslySetInnerHTML={{ __html: `
             @keyframes kenBurns {
               0% { transform: scale(1) translate(0, 0); }
@@ -1125,7 +1152,7 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
         )}
 
         {/* Cinematic replay button for draw outcomes (no winnerBook) */}
-        {isCompleted && videoCheckDone && !winnerBook && videoStatus !== 'generating' && (
+        {isCompleted && videoCheckDone && !winnerBook && (!videoStatus || videoStatus === 'complete') && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40">
             {videoStatus === 'complete' && videoUrl ? (
               <button
