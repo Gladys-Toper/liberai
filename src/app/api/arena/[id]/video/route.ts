@@ -387,6 +387,11 @@ async function runStep(sessionId: string, state: VideoState) {
           cameraMotion: chunk.cameraMotion,
         })
         console.log(`[Video] [${sessionId}] First chunk: ${mp4Buffer.length} bytes`)
+        // For Kling, the video_id is embedded in the buffer for use in extend
+        const firstKlingId = (mp4Buffer as Buffer & { klingVideoId?: string }).klingVideoId
+        if (firstKlingId) {
+          currentVideoUri = firstKlingId
+        }
       } else {
         if (!currentVideoUri) throw new Error(`No videoUri for extend at chunk ${currentIndex}`)
         console.log(`[Video] [${sessionId}] Chunk ${currentIndex}/${chunks.length}: extend (${chunk.durationSeconds}s)`)
@@ -397,20 +402,25 @@ async function runStep(sessionId: string, state: VideoState) {
             duration: chunk.durationSeconds,
           })
         } catch (extendErr) {
-          // Recover from expired LTX URI using Supabase checkpoint
+          // Recover from checkpoint — provider-specific
           const cpUrl = currentCheckpointUrl || state.checkpointUrl
           if (!cpUrl) throw extendErr
           console.warn(`[Video] [${sessionId}] Extend failed, recovering from checkpoint...`)
-          const cpRes = await fetch(cpUrl)
-          if (!cpRes.ok) throw extendErr
-          const cpBuffer = Buffer.from(await cpRes.arrayBuffer())
-          currentVideoUri = await videoService.uploadVideo(cpBuffer)
-          console.log(`[Video] [${sessionId}] Fresh LTX URI obtained, retrying extend...`)
-          mp4Buffer = await videoService.extendVideo({
-            videoUri: currentVideoUri,
-            prompt: chunk.videoPrompt,
-            duration: chunk.durationSeconds,
-          })
+          try {
+            const cpRes = await fetch(cpUrl)
+            if (!cpRes.ok) throw extendErr
+            const cpBuffer = Buffer.from(await cpRes.arrayBuffer())
+            currentVideoUri = await videoService.uploadVideo(cpBuffer)
+            console.log(`[Video] [${sessionId}] Fresh URI obtained, retrying extend...`)
+            mp4Buffer = await videoService.extendVideo({
+              videoUri: currentVideoUri,
+              prompt: chunk.videoPrompt,
+              duration: chunk.durationSeconds,
+            })
+          } catch {
+            // If uploadVideo is not supported (e.g. Kling), re-throw original error
+            throw extendErr
+          }
         }
         console.log(`[Video] [${sessionId}] Chunk ${currentIndex}: ${mp4Buffer.length} bytes`)
       }
@@ -447,11 +457,19 @@ async function runStep(sessionId: string, state: VideoState) {
         return // All done!
       }
 
-      // ── Upload to LTX for next extend + save checkpoint ──
-      console.log(`[Video] [${sessionId}] Uploading to LTX for next extend...`)
-      currentVideoUri = await videoService.uploadVideo(mp4Buffer)
+      // ── Prepare for next extend ──
+      // Kling: video_id is embedded in the buffer by the adapter.
+      // LTX: upload the buffer to get a fresh storage URI.
+      const klingVideoId = (mp4Buffer as Buffer & { klingVideoId?: string }).klingVideoId
+      if (klingVideoId) {
+        currentVideoUri = klingVideoId
+        console.log(`[Video] [${sessionId}] Using Kling video_id=${klingVideoId} for next extend`)
+      } else {
+        console.log(`[Video] [${sessionId}] Uploading to provider for next extend...`)
+        currentVideoUri = await videoService.uploadVideo(mp4Buffer)
+      }
 
-      // Save checkpoint to Supabase Storage (survives LTX URI expiry)
+      // Save checkpoint to Supabase Storage (survives provider URI/ID expiry)
       const checkpointPath = `checkpoints/${sessionId}.mp4`
       await db.storage.from('debate-video').upload(checkpointPath, mp4Buffer, {
         contentType: 'video/mp4',

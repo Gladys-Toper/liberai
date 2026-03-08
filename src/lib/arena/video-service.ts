@@ -1,12 +1,15 @@
 // Cinematic Video Pipeline — Video Service Abstraction Layer
 //
 // IVideoService abstracts the video generation backend so we can swap
-// LTX for Veo, RunPod, etc. without touching orchestration code.
+// providers without touching orchestration code.
 //
-// LTX 2.3 generates video + lip-synced speech + ambient audio natively.
-// Dialogue in quotation marks → synthesized speech with accent/emotion.
+// Supported providers:
+// - LTX 2.3: Synchronous, returns MP4 buffer directly. Dialogue lip-sync.
+// - Kling 2.6: Async (submit → poll → download). Native audio, 5-10s clips,
+//   extend via video_id up to 3 min. JWT auth with HMAC-SHA256.
 
 import { createClient } from '@supabase/supabase-js'
+import { createHmac } from 'crypto'
 
 // ─── Public Types ────────────────────────────────────────────────
 
@@ -43,13 +46,241 @@ export interface IVideoService {
 export function createVideoService(): IVideoService {
   const provider = process.env.VIDEO_PROVIDER || 'ltx'
   switch (provider) {
+    case 'kling':
+      return new KlingVideoService()
     case 'ltx':
       return new LtxVideoService()
-    // Future adapters:
-    // case 'veo':    return new VeoVideoService()
-    // case 'runpod': return new RunPodVideoService()
     default:
       return new LtxVideoService()
+  }
+}
+
+// ─── Kling Adapter ──────────────────────────────────────────────
+
+const KLING_BASE = 'https://api-singapore.klingai.com'
+
+/** Generate a JWT token for Kling API auth (HS256, no external deps) */
+function generateKlingJwt(accessKey: string, secretKey: string): string {
+  const header = { alg: 'HS256', typ: 'JWT' }
+  const now = Math.floor(Date.now() / 1000)
+  const payload = { iss: accessKey, exp: now + 1800, nbf: now - 5 }
+
+  const b64url = (obj: unknown) =>
+    Buffer.from(JSON.stringify(obj)).toString('base64url')
+  const headerB64 = b64url(header)
+  const payloadB64 = b64url(payload)
+  const sig = createHmac('sha256', secretKey)
+    .update(`${headerB64}.${payloadB64}`)
+    .digest('base64url')
+
+  return `${headerB64}.${payloadB64}.${sig}`
+}
+
+interface KlingTaskResponse {
+  code: number
+  message: string
+  data: {
+    task_id: string
+    task_status: 'submitted' | 'processing' | 'succeed' | 'failed'
+    task_status_msg?: string
+    task_result?: {
+      videos: { id: string; url: string; duration: string }[]
+    }
+  }
+}
+
+class KlingVideoService implements IVideoService {
+  private accessKey: string
+  private secretKey: string
+
+  constructor() {
+    const ak = process.env.KLING_ACCESS_KEY
+    const sk = process.env.KLING_SECRET_KEY
+    if (!ak || !sk) throw new Error('KLING_ACCESS_KEY and KLING_SECRET_KEY must be set')
+    this.accessKey = ak
+    this.secretKey = sk
+  }
+
+  private getHeaders(): Record<string, string> {
+    return {
+      'Authorization': `Bearer ${generateKlingJwt(this.accessKey, this.secretKey)}`,
+      'Content-Type': 'application/json',
+    }
+  }
+
+  async generateFirst(params: GenerateFirstParams): Promise<Buffer> {
+    // Kling durations: '5' or '10'. Pick closest.
+    const duration = params.duration <= 7 ? '5' : '10'
+
+    const body = {
+      model_name: 'kling-v2-6',
+      prompt: params.prompt,
+      duration,
+      aspect_ratio: '16:9',
+      mode: 'std',
+      sound: 'on',
+    }
+
+    console.log(`[Kling] text2video: "${params.prompt.slice(0, 80)}..." (${duration}s)`)
+
+    const createRes = await this.fetchWithRetry(`${KLING_BASE}/v1/videos/text2video`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(body),
+    })
+
+    if (!createRes.ok) {
+      const errText = await createRes.text()
+      throw new Error(`Kling text2video failed (${createRes.status}): ${errText}`)
+    }
+
+    const createData = (await createRes.json()) as KlingTaskResponse
+    if (createData.code !== 0) {
+      throw new Error(`Kling text2video error: ${createData.message}`)
+    }
+
+    const taskId = createData.data.task_id
+    console.log(`[Kling] Task created: ${taskId}`)
+
+    return this.pollAndDownload(taskId, `/v1/videos/text2video/${taskId}`)
+  }
+
+  /**
+   * Upload a video buffer — Kling extends by video_id (returned from generation),
+   * not by uploading raw buffers. We store the Kling video_id as the "URI".
+   * This is called by the pipeline but for Kling, the video_id is already
+   * captured from the generation result. Return it as-is.
+   */
+  async uploadVideo(_mp4Buffer: Buffer): Promise<string> {
+    // Kling doesn't need raw buffer uploads for extend.
+    // The video_id from the last generation serves as the extend reference.
+    // The pipeline saves this as videoUri after each chunk.
+    // If we need to recover from a checkpoint, we'll use image-to-video
+    // with the last frame instead.
+    throw new Error(
+      'Kling does not support raw buffer uploads. Use video_id from generation result.',
+    )
+  }
+
+  async extendVideo(params: ExtendVideoParams): Promise<Buffer> {
+    // params.videoUri contains the Kling video_id from the previous generation
+    const body = {
+      video_id: params.videoUri,
+      prompt: params.prompt,
+    }
+
+    console.log(`[Kling] extend: video_id=${params.videoUri}, "${params.prompt.slice(0, 80)}..."`)
+
+    const createRes = await this.fetchWithRetry(`${KLING_BASE}/v1/videos/video-extend`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(body),
+    })
+
+    if (!createRes.ok) {
+      const errText = await createRes.text()
+      throw new Error(`Kling extend failed (${createRes.status}): ${errText}`)
+    }
+
+    const createData = (await createRes.json()) as KlingTaskResponse
+    if (createData.code !== 0) {
+      throw new Error(`Kling extend error: ${createData.message}`)
+    }
+
+    const taskId = createData.data.task_id
+    console.log(`[Kling] Extend task created: ${taskId}`)
+
+    return this.pollAndDownload(taskId, `/v1/videos/video-extend/${taskId}`)
+  }
+
+  /**
+   * Poll a Kling task until it completes, then download the video buffer.
+   * Returns both the MP4 buffer and stashes the video_id for extend.
+   */
+  private async pollAndDownload(
+    taskId: string,
+    pollPath: string,
+  ): Promise<Buffer> {
+    const maxPollMs = 10 * 60 * 1000  // 10 min timeout
+    const pollInterval = 5_000         // 5s between polls
+    const startTime = Date.now()
+
+    while (Date.now() - startTime < maxPollMs) {
+      await new Promise((r) => setTimeout(r, pollInterval))
+
+      const pollRes = await fetch(`${KLING_BASE}${pollPath}`, {
+        method: 'GET',
+        headers: this.getHeaders(),
+      })
+
+      if (!pollRes.ok) {
+        console.warn(`[Kling] Poll ${taskId} got ${pollRes.status}, retrying...`)
+        continue
+      }
+
+      const pollData = (await pollRes.json()) as KlingTaskResponse
+
+      if (pollData.data.task_status === 'succeed') {
+        const videos = pollData.data.task_result?.videos
+        if (!videos?.length) {
+          throw new Error(`Kling task ${taskId} succeeded but no videos in result`)
+        }
+
+        const videoUrl = videos[0].url
+        const videoId = videos[0].id
+        console.log(`[Kling] Task ${taskId} complete. video_id=${videoId}, downloading...`)
+
+        // Download the MP4
+        const dlRes = await fetch(videoUrl)
+        if (!dlRes.ok) {
+          throw new Error(`Kling video download failed (${dlRes.status})`)
+        }
+
+        const buffer = Buffer.from(await dlRes.arrayBuffer())
+        console.log(`[Kling] Downloaded ${Math.round(buffer.length / 1024)}KB`)
+
+        // Stash the video_id in the buffer so the pipeline can extract it.
+        // We use a custom property on the Buffer object.
+        ;(buffer as Buffer & { klingVideoId?: string }).klingVideoId = videoId
+
+        return buffer
+      }
+
+      if (pollData.data.task_status === 'failed') {
+        throw new Error(
+          `Kling task ${taskId} failed: ${pollData.data.task_status_msg || 'unknown error'}`,
+        )
+      }
+
+      const elapsed = Math.round((Date.now() - startTime) / 1000)
+      console.log(`[Kling] Task ${taskId}: ${pollData.data.task_status} (${elapsed}s)`)
+    }
+
+    throw new Error(`Kling task ${taskId} timed out after ${maxPollMs / 1000}s`)
+  }
+
+  private async fetchWithRetry(
+    url: string,
+    init: RequestInit,
+    maxRetries = 3,
+  ): Promise<Response> {
+    let lastErr: Error | null = null
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const res = await fetch(url, init)
+      if (res.status !== 429) return res
+
+      const retryAfter = res.headers.get('Retry-After')
+      const waitMs = retryAfter
+        ? parseInt(retryAfter, 10) * 1000
+        : Math.min(1000 * 2 ** attempt, 30_000)
+
+      console.warn(`[Kling] Rate limited (429), retry ${attempt + 1}/${maxRetries} in ${waitMs}ms`)
+      lastErr = new Error(`Rate limited after ${maxRetries} retries`)
+      await new Promise((r) => setTimeout(r, waitMs))
+    }
+
+    throw lastErr ?? new Error('Kling request failed after retries')
   }
 }
 
