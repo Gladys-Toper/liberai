@@ -36,6 +36,7 @@ interface VideoState {
   chunks: SceneChunk[]
   currentChunkIndex: number   // next chunk to process (0-based)
   videoUri: string | null     // LTX storage URI of accumulated video
+  checkpointUrl?: string      // Supabase Storage URL of last checkpoint (survives URI expiry)
   stepInProgress: boolean
   stepStartedAt?: string      // ISO timestamp for stale lock detection
   avgSecondsPerStep: number   // running average for time estimates
@@ -354,6 +355,7 @@ async function runStep(sessionId: string, state: VideoState) {
 
   let currentIndex = state.currentChunkIndex
   let currentVideoUri = state.videoUri
+  let currentCheckpointUrl = state.checkpointUrl || undefined
   let avgSeconds = state.avgSecondsPerStep
 
   try {
@@ -388,11 +390,28 @@ async function runStep(sessionId: string, state: VideoState) {
       } else {
         if (!currentVideoUri) throw new Error(`No videoUri for extend at chunk ${currentIndex}`)
         console.log(`[Video] [${sessionId}] Chunk ${currentIndex}/${chunks.length}: extend (${chunk.durationSeconds}s)`)
-        mp4Buffer = await videoService.extendVideo({
-          videoUri: currentVideoUri,
-          prompt: chunk.videoPrompt,
-          duration: chunk.durationSeconds,
-        })
+        try {
+          mp4Buffer = await videoService.extendVideo({
+            videoUri: currentVideoUri,
+            prompt: chunk.videoPrompt,
+            duration: chunk.durationSeconds,
+          })
+        } catch (extendErr) {
+          // Recover from expired LTX URI using Supabase checkpoint
+          const cpUrl = currentCheckpointUrl || state.checkpointUrl
+          if (!cpUrl) throw extendErr
+          console.warn(`[Video] [${sessionId}] Extend failed, recovering from checkpoint...`)
+          const cpRes = await fetch(cpUrl)
+          if (!cpRes.ok) throw extendErr
+          const cpBuffer = Buffer.from(await cpRes.arrayBuffer())
+          currentVideoUri = await videoService.uploadVideo(cpBuffer)
+          console.log(`[Video] [${sessionId}] Fresh LTX URI obtained, retrying extend...`)
+          mp4Buffer = await videoService.extendVideo({
+            videoUri: currentVideoUri,
+            prompt: chunk.videoPrompt,
+            duration: chunk.durationSeconds,
+          })
+        }
         console.log(`[Video] [${sessionId}] Chunk ${currentIndex}: ${mp4Buffer.length} bytes`)
       }
 
@@ -428,9 +447,22 @@ async function runStep(sessionId: string, state: VideoState) {
         return // All done!
       }
 
-      // ── Upload to LTX for next extend ──
+      // ── Upload to LTX for next extend + save checkpoint ──
       console.log(`[Video] [${sessionId}] Uploading to LTX for next extend...`)
       currentVideoUri = await videoService.uploadVideo(mp4Buffer)
+
+      // Save checkpoint to Supabase Storage (survives LTX URI expiry)
+      const checkpointPath = `checkpoints/${sessionId}.mp4`
+      await db.storage.from('debate-video').upload(checkpointPath, mp4Buffer, {
+        contentType: 'video/mp4',
+        upsert: true,
+      })
+      const { data: { publicUrl } } = db.storage
+        .from('debate-video')
+        .getPublicUrl(checkpointPath)
+      currentCheckpointUrl = publicUrl
+      console.log(`[Video] [${sessionId}] Checkpoint saved (${Math.round(mp4Buffer.length / 1024 / 1024)}MB)`)
+
       currentIndex += 1
 
       // Update progress in DB after each chunk
@@ -442,6 +474,7 @@ async function runStep(sessionId: string, state: VideoState) {
             ...state,
             currentChunkIndex: currentIndex,
             videoUri: currentVideoUri,
+            checkpointUrl: currentCheckpointUrl,
             stepInProgress: true,
             stepStartedAt: new Date().toISOString(),
             avgSecondsPerStep: avgSeconds,
@@ -462,6 +495,7 @@ async function runStep(sessionId: string, state: VideoState) {
             ...state,
             currentChunkIndex: currentIndex,
             videoUri: currentVideoUri,
+            checkpointUrl: currentCheckpointUrl,
             stepInProgress: false,
             avgSecondsPerStep: avgSeconds,
           },
@@ -485,6 +519,7 @@ async function runStep(sessionId: string, state: VideoState) {
           ...state,
           currentChunkIndex: currentIndex,
           videoUri: currentVideoUri,
+          checkpointUrl: currentCheckpointUrl,
           avgSecondsPerStep: avgSeconds,
           stepInProgress: false,
           lastError: errMsg.slice(0, 500),
