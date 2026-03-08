@@ -472,15 +472,24 @@ async function runStep(sessionId: string, state: VideoState) {
       await triggerNextStep(sessionId)
     }
   } catch (err) {
-    console.error(`[Video] [${sessionId}] Step failed:`, (err as Error)?.message || err)
+    const errMsg = (err as Error)?.message || String(err)
+    console.error(`[Video] [${sessionId}] Step failed at chunk ${currentIndex}:`, errMsg)
     console.error(`[Video] [${sessionId}] Stack:`, (err as Error)?.stack)
 
-    // Mark failed but preserve state for retry
+    // Save CURRENT progress (not original state) so retries can resume
     await db
       .from('debate_sessions')
       .update({
         video_status: 'failed',
-        video_state: { ...state, stepInProgress: false },
+        video_state: {
+          ...state,
+          currentChunkIndex: currentIndex,
+          videoUri: currentVideoUri,
+          avgSecondsPerStep: avgSeconds,
+          stepInProgress: false,
+          lastError: errMsg.slice(0, 500),
+          lastErrorChunk: currentIndex,
+        },
       })
       .eq('id', sessionId)
   }
