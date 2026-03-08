@@ -1112,7 +1112,7 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
         </AnimatePresence>
 
         {/* Synthesis overlay (post-fight) — hidden during video generation */}
-        {isCompleted && videoCheckDone && !winnerBook && videoStatus !== 'generating' && (
+        {isCompleted && videoCheckDone && !winnerBook && (!videoStatus || videoStatus === 'complete') && (
           <div className="absolute bottom-32 left-1/2 -translate-x-1/2 z-30 w-full max-w-3xl px-4">
             <SynthesisPanel
               sessionId={session.id}
