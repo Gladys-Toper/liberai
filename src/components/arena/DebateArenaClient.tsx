@@ -237,6 +237,16 @@ export function DebateArenaClient({ initialState, isOwner }: DebateArenaClientPr
           } catch { /* poster is optional */ }
         } else if (data.status === 'failed') {
           setVideoStatus('failed')
+          setVideoProgress(data.progress || 0)
+          setVideoTotal(data.total || 0)
+          // Fetch poster for failed wait screen too
+          try {
+            const posterRes = await fetch(`/api/arena/${session.id}/poster`)
+            if (posterRes.ok) {
+              const posterData = await posterRes.json()
+              if (posterData.posterUrl) setPosterUrl(posterData.posterUrl)
+            }
+          } catch { /* poster is optional */ }
         }
       } catch { /* video check optional */ } finally {
         setVideoCheckDone(true)
