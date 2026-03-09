@@ -8,6 +8,9 @@ const nextConfig: NextConfig = {
     ],
   },
   serverExternalPackages: ['ffmpeg-static'],
+  outputFileTracingIncludes: {
+    '/api/arena/\\[id\\]/video': ['./node_modules/ffmpeg-static/ffmpeg'],
+  },
   experimental: {
     serverActions: {
       bodySizeLimit: '10mb',

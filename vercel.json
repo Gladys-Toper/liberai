@@ -4,5 +4,10 @@
       "path": "/api/cron/aggregate-costs",
       "schedule": "0 6 * * *"
     }
-  ]
+  ],
+  "functions": {
+    "src/app/api/arena/[id]/video/route.ts": {
+      "memory": 3009
+    }
+  }
 }

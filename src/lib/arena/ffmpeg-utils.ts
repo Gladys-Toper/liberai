@@ -12,12 +12,13 @@
 import { randomUUID } from 'crypto'
 import { writeFile, readFile, unlink, writeFile as writeFileAsync } from 'fs/promises'
 import { join } from 'path'
-import ffmpegStatic from 'ffmpeg-static'
 import ffmpeg from 'fluent-ffmpeg'
 
-if (ffmpegStatic) {
-  ffmpeg.setFfmpegPath(ffmpegStatic)
-}
+// Use process.cwd()-relative path — matches Vercel's outputFileTracingIncludes
+// and the vercel-labs/ffmpeg-on-vercel pattern. The ffmpeg-static default export
+// can resolve to the wrong path when bundled.
+const ffmpegPath = join(process.cwd(), 'node_modules', 'ffmpeg-static', 'ffmpeg')
+ffmpeg.setFfmpegPath(ffmpegPath)
 
 const TMP_DIR = '/tmp'
 
