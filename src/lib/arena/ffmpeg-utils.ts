@@ -36,8 +36,8 @@ export async function extractLastFrame(videoBuffer: Buffer): Promise<Buffer> {
 
     await new Promise<void>((resolve, reject) => {
       ffmpeg(inputPath)
+        .inputOptions(['-sseof', '-0.5'])  // Seek to 0.5s before end (input option)
         .outputOptions([
-          '-sseof', '-0.5',    // Seek to 0.5s before end
           '-frames:v', '1',    // Extract 1 frame
           '-q:v', '2',         // High quality JPG
         ])
