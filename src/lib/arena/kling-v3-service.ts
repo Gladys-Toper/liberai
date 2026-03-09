@@ -213,20 +213,26 @@ export class KlingV3VideoService {
   private async fetchWithRetry(
     url: string,
     init: RequestInit,
-    maxRetries = 3,
+    maxRetries = 6,
   ): Promise<Response> {
     let lastErr: Error | null = null
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      // Re-generate JWT for each attempt (may expire during long waits)
+      if (attempt > 0 && init.headers) {
+        const headers = init.headers as Record<string, string>
+        headers['Authorization'] = `Bearer ${generateKlingJwt(this.accessKey, this.secretKey)}`
+      }
+
       const res = await fetch(url, init)
       if (res.status !== 429) return res
 
       const retryAfter = res.headers.get('Retry-After')
       const waitMs = retryAfter
         ? parseInt(retryAfter, 10) * 1000
-        : Math.min(1000 * 2 ** attempt, 30_000)
+        : Math.min(10_000 * 2 ** attempt, 120_000) // 10s, 20s, 40s, 80s, 120s, 120s
 
-      console.warn(`[KlingV3] Rate limited (429), retry ${attempt + 1}/${maxRetries} in ${waitMs}ms`)
+      console.warn(`[KlingV3] Rate limited (429), retry ${attempt + 1}/${maxRetries} in ${Math.round(waitMs / 1000)}s`)
       lastErr = new Error(`Rate limited after ${maxRetries} retries`)
       await new Promise((r) => setTimeout(r, waitMs))
     }

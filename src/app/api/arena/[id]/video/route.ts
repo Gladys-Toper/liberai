@@ -439,6 +439,12 @@ async function runStep(sessionId: string, state: VideoState) {
         }
       }
 
+      // Cooldown between Kling API calls to avoid rate limiting
+      if (!isFirst) {
+        console.log(`[Video] [${sessionId}] Cooldown 5s before segment ${currentIndex}...`)
+        await new Promise((r) => setTimeout(r, 5_000))
+      }
+
       let mp4Buffer: Buffer
 
       if (isFirst || !lastFrameUrl) {
