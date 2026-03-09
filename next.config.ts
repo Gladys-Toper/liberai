@@ -7,6 +7,7 @@ const nextConfig: NextConfig = {
       { protocol: 'https', hostname: 'images.unsplash.com' },
     ],
   },
+  serverExternalPackages: ['ffmpeg-static'],
   experimental: {
     serverActions: {
       bodySizeLimit: '10mb',
