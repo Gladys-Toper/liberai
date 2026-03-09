@@ -1,18 +1,19 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// Cinematic Video Pipeline — Screenplay Generator
+// Cinematic Video Pipeline — Screenplay Generator (Kling V3)
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // Converts a completed debate transcript (rounds, axioms, arguments, commentary)
-// into an array of SceneChunks, each with a rich video prompt for LTX 2.3.
+// into an array of SceneChunks, each with a self-contained video prompt for Kling V3.
 //
 // Target video length: 3-5 minutes depending on round count.
 // Structure per round: attack (10s) + defense (10s) + commentary (10s) = 30s/round
 // Plus establishing (10s) + intro (10s) + verdict (10s) = 30s overhead
 // 5 rounds → 180s (3 min), 7 rounds → 240s (4 min), 10 rounds → 330s (5.5 min)
 //
-// IMPORTANT: Because we use LTX's extend endpoint, each chunk (after the first)
-// describes what happens NEXT — a continuation from the previous scene's last frame.
-// The prompts must never re-describe the full setting, only the new action/camera move.
+// IMPORTANT: Kling V3 generates each segment independently (no extend).
+// Visual continuity is achieved via last-frame seeding (image2video).
+// Character consistency via kling_elements + @ElementName in prompts.
+// Each prompt must be SELF-CONTAINED with full scene description.
 //
 // ── AI CASTING (matches model-provider.ts) ─────────────────────────────
 //
@@ -23,9 +24,9 @@
 // The model is sourced via ArenaModelProvider role 'screenplay' — never
 // hardcode model IDs here.
 //
-// LTX 2.3 generates video + lip-synced speech + ambient audio natively.
+// Kling V3 generates video + lip-synced speech + ambient audio natively.
 // Dialogue in quotation marks → synthesized speech with accent and emotion.
-// NO separate TTS needed. LTX IS the voice engine.
+// NO separate TTS needed. Kling V3 IS the voice engine.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { generateText } from 'ai'
@@ -91,7 +92,7 @@ export async function generateScreenplay(
     durationSeconds: 10,
     roundNumber: 0,
     sceneType: 'establishing',
-    videoPrompt: buildEstablishingPrompt(),
+    videoPrompt: buildEstablishingPrompt(transcript),
     cameraMotion: 'dolly_in',
     hpA: totalHp(axiomsA),
     hpB: totalHp(axiomsB),
@@ -105,7 +106,7 @@ export async function generateScreenplay(
     durationSeconds: 10,
     roundNumber: 0,
     sceneType: 'intro',
-    videoPrompt: buildIntroContinuation(transcript, dialogue.intro),
+    videoPrompt: buildIntroPrompt(transcript, dialogue.intro),
     cameraMotion: 'focus_shift',
     hpA: totalHp(axiomsA),
     hpB: totalHp(axiomsB),
@@ -160,7 +161,7 @@ export async function generateScreenplay(
       durationSeconds: 10,
       roundNumber: round.round_number,
       sceneType: 'attack',
-      videoPrompt: buildAttackContinuation(
+      videoPrompt: buildAttackPrompt(
         transcript,
         round,
         attack,
@@ -187,7 +188,7 @@ export async function generateScreenplay(
         durationSeconds: 10,
         roundNumber: round.round_number,
         sceneType: 'defense',
-        videoPrompt: buildDefenseContinuation(
+        videoPrompt: buildDefensePrompt(
           transcript,
           round,
           defense,
@@ -209,7 +210,7 @@ export async function generateScreenplay(
         durationSeconds: 10,
         roundNumber: round.round_number,
         sceneType: 'commentary',
-        videoPrompt: buildCommentaryContinuation(roundDialogue.commentary),
+        videoPrompt: buildCommentaryPrompt(transcript, roundDialogue.commentary),
         cameraMotion: round.round_number % 2 === 0 ? 'jib_up' : 'jib_down',
         hpA,
         hpB,
@@ -233,7 +234,7 @@ export async function generateScreenplay(
     durationSeconds: 10,
     roundNumber: rounds.length,
     sceneType: 'verdict',
-    videoPrompt: buildVerdictContinuation(transcript, dialogue.verdict, winner),
+    videoPrompt: buildVerdictPrompt(transcript, dialogue.verdict, winner),
     cameraMotion: 'dolly_out',
     hpA: totalHp(runningAxiomsA),
     hpB: totalHp(runningAxiomsB),
@@ -273,7 +274,7 @@ interface ScreenplayDialogue {
  *   • Commentator — snarky, off-color, witty (boxing commentator meets philosopher)
  *   • Referee — authoritative, measured, definitive
  *
- * LTX 2.3 handles all voice synthesis — dialogue in quotation marks becomes
+ * Kling V3 handles all voice synthesis — dialogue in quotation marks becomes
  * lip-synced speech with natural cadence, accent, and emotion. No separate TTS.
  *
  * The debate engine already generated the analytical content (claims, rebuttals,
@@ -393,74 +394,90 @@ function parseJsonResponse(text: string): unknown {
 }
 
 // ─── Prompt Builders ─────────────────────────────────────────────
-// Scene 1 (establishing): Full visual setup — used with generateFirst()
-// Scene 2 (intro): Commentator speaks — used with extendVideo()
-// Scene 3+: Continuation prompts — used with extendVideo()
-//   These describe ONLY what changes next (new speaker, camera move, reaction)
-//   They NEVER re-describe the full setting.
+// Kling V3: Each prompt is SELF-CONTAINED with full scene context.
+// Segments are independent — connected via last-frame seeding (image2video).
+// Character consistency via @AuthorA / @AuthorB element references.
+// Dialogue in quotes → Kling V3 native lip-synced speech.
 
-function buildEstablishingPrompt(): string {
+function buildEstablishingPrompt(
+  t: DebateTranscript,
+): string {
   return `${ESTABLISHING_SCENE}
-
-The camera glides through grand oak doors into a packed debating chamber. Warm amber spotlights illuminate two podiums center-stage. The audience buzzes with anticipation. A large digital scoreboard above the stage shows two names with glowing health bars at 100%.
+The camera glides through grand oak doors into a packed debating chamber. Warm amber spotlights illuminate two podiums center-stage. @AuthorA stands at the left podium in formal academic attire. @AuthorB stands at the right podium in a tailored suit. The audience buzzes with anticipation. A large digital scoreboard above the stage shows two names with glowing health bars at 100%.
 Ambient: crowd murmur building, orchestral score swelling, dramatic brass fanfare.`
 }
 
-function buildIntroContinuation(
+function buildIntroPrompt(
   t: DebateTranscript,
   introDialogue: string,
 ): string {
-  return `The camera pans right to a commentator desk. A charismatic commentator in a waistcoat sits behind the desk, papers arranged neatly. They look up at the camera with a knowing smile and speak:
+  return `Oxford Union debating chamber, dark oak paneling, warm amber spotlights. A commentator desk sits stage-right. A charismatic commentator in a waistcoat sits behind the desk with papers arranged neatly. @AuthorA visible at the left podium, @AuthorB at the right podium. The commentator looks up at the camera with a knowing smile and speaks:
 ${introDialogue}
 The commentator gestures toward both podiums. The audience applauds.
 Ambient: crowd applause fading to attentive silence, subtle dramatic music.`
 }
 
-function buildAttackContinuation(
+function buildAttackPrompt(
   t: DebateTranscript,
   round: DebateRound,
   attack: DebateArgument | undefined,
   dialogue: string,
 ): string {
-  const side = round.attacker_side === 'a' ? 'left' : 'right'
+  const isA = round.attacker_side === 'a'
+  const side = isA ? 'left' : 'right'
+  const attacker = isA ? '@AuthorA' : '@AuthorB'
+  const defender = isA ? '@AuthorB' : '@AuthorA'
   const hasBigHit = round.hp_deltas.some((d) => Math.abs(d.delta) > 15)
 
-  return `Continuing in the same debating chamber. The camera pans to the ${side} podium. A speaker in a tailored suit rises and addresses the chamber:
+  return `Oxford Union debating chamber, dark oak paneling, leather benches, warm amber spotlights, packed audience. The camera frames the ${side} podium. ${attacker} stands at the podium in formal attire, addressing the chamber with intensity:
 ${dialogue}
-${hasBigHit ? 'The audience reacts with audible gasps. Several members lean forward in their seats.' : 'The audience listens intently, some taking notes.'}
+${defender} listens from the opposite podium. ${hasBigHit ? 'The audience reacts with audible gasps. Several members lean forward in their seats.' : 'The audience listens intently, some taking notes.'}
+Camera: medium shot on ${attacker}, ${hasBigHit ? 'slow push-in to close-up' : 'steady'}.
 Ambient: ${hasBigHit ? 'dramatic tension, crowd murmur rising' : 'quiet attention, pen scratching'}.`
 }
 
-function buildDefenseContinuation(
+function buildDefensePrompt(
   t: DebateTranscript,
   round: DebateRound,
   defense: DebateArgument,
   dialogue: string,
 ): string {
-  const side = round.attacker_side === 'a' ? 'right' : 'left'
+  const isA = round.attacker_side === 'a'
+  const side = isA ? 'right' : 'left'
+  const defender = isA ? '@AuthorB' : '@AuthorA'
+  const attacker = isA ? '@AuthorA' : '@AuthorB'
 
-  return `The camera shifts focus to the ${side} podium. The opposing speaker stands calmly and delivers a measured response:
+  return `Oxford Union debating chamber, dark oak paneling, leather benches, warm amber spotlights. The camera frames the ${side} podium. ${defender} stands calmly at the podium and delivers a measured response:
 ${dialogue}
-The audience nods appreciatively. Both speakers are now visible in a wide two-shot.
+${attacker} watches from the opposite podium. The audience nods appreciatively. Both speakers visible in a wide two-shot.
+Camera: medium shot on ${defender}, slow pull to wide two-shot.
 Ambient: approving murmur, gentle applause.`
 }
 
-function buildCommentaryContinuation(commentary: string): string {
-  return `The camera cuts to the commentator desk stage-right. The commentator leans forward excitedly, adjusts their microphone, and addresses the camera:
+function buildCommentaryPrompt(
+  t: DebateTranscript,
+  commentary: string,
+): string {
+  return `Oxford Union debating chamber. The camera frames the commentator desk stage-right. A charismatic commentator in a waistcoat leans forward excitedly, adjusts their microphone, and addresses the camera:
 ${commentary}
-Quick audience reaction shots — some audience members nodding vigorously, others shaking their heads. The chamber buzzes with energy.
+@AuthorA and @AuthorB visible at their podiums in the background. Quick audience reaction shots — some nodding vigorously, others shaking their heads. The chamber buzzes with energy.
+Camera: medium close-up on commentator, quick cuts to audience.
 Ambient: excited crowd chatter, dramatic orchestral sting.`
 }
 
-function buildVerdictContinuation(
+function buildVerdictPrompt(
   t: DebateTranscript,
   verdictDialogue: string,
   winner: 'a' | 'b' | 'draw',
 ): string {
-  return `The chamber falls quiet. A figure in academic robes steps to center stage between the podiums. They raise one hand and announce the verdict:
+  const winnerRef = winner === 'a' ? '@AuthorA' : winner === 'b' ? '@AuthorB' : null
+
+  return `Oxford Union debating chamber, dark oak paneling, warm amber spotlights. The chamber falls quiet. A figure in academic robes steps to center stage between the podiums, with @AuthorA at the left podium and @AuthorB at the right. The referee raises one hand and announces the verdict:
 ${verdictDialogue}
-${winner !== 'draw' ? 'One speaker raises their hand in acknowledgment. The audience stands, applauding.' : 'Both speakers bow to each other. Standing ovation.'}
-The camera slowly pulls back through the chamber doors. Ambient: thunderous applause, orchestral finale.`
+${winnerRef ? `${winnerRef} raises their hand in acknowledgment. The audience stands, applauding.` : 'Both @AuthorA and @AuthorB bow to each other. Standing ovation.'}
+The camera slowly pulls back through the chamber doors.
+Camera: wide shot, slow dolly out.
+Ambient: thunderous applause, orchestral finale.`
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────

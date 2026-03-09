@@ -1,10 +1,11 @@
-// POST /api/arena/[id]/video — Trigger cinematic video generation
+// POST /api/arena/[id]/video — Trigger cinematic video generation (Kling V3)
 // GET  /api/arena/[id]/video — Poll generation progress
 //
-// Architecture: Self-chaining pipeline. Each POST processes ONE video chunk
-// (~60-120s), then triggers the next step via an internal HTTP call to itself.
-// This keeps each serverless invocation within Vercel's 300s limit while
-// running the entire pipeline autonomously — no client re-triggering needed.
+// Architecture: Self-chaining pipeline using Kling V3 independent segments.
+// Each segment is generated via text2video (first) or image2video (subsequent),
+// with last-frame seeding for visual continuity and kling_elements for
+// character consistency. Segments are checkpointed to Supabase Storage.
+// Final step concatenates all segments via ffmpeg.
 
 import { NextResponse } from 'next/server'
 import { after } from 'next/server'
@@ -18,29 +19,45 @@ import {
 } from '@/lib/agents/debate-engine'
 import { generateScreenplay } from '@/lib/arena/screenplay-generator'
 import {
-  createVideoService,
   uploadVideoToStorage,
+  generateCharacterRefImage,
 } from '@/lib/arena/video-service'
+import { KlingV3VideoService } from '@/lib/arena/kling-v3-service'
+import type { KlingElement } from '@/lib/arena/kling-v3-service'
+import { extractLastFrame, concatenateVideos } from '@/lib/arena/ffmpeg-utils'
 import { buildTimeline } from '@/lib/arena/timeline-sync'
 import type { SceneChunk } from '@/lib/arena/timeline-sync'
 
 // Fluid Compute (Pro plan) allows up to 800s per invocation.
-// Process multiple chunks per invocation to minimize fragile self-chaining.
-// Each LTX call ~60-120s + upload ~10-20s = ~105s per chunk.
-// At 800s limit: ~6-7 chunks per invocation safely (leave 100s buffer).
+// Each Kling V3 segment ~60-90s generation + ~10s frame extraction + ~10s upload.
+// At 800s limit: ~6-8 segments per invocation safely (leave 100s buffer).
 export const maxDuration = 800
 
 // ─── Types ───────────────────────────────────────────────────────
 
+interface CharacterRef {
+  name: string
+  refImageUrl: string
+  description: string
+}
+
 interface VideoState {
   chunks: SceneChunk[]
-  currentChunkIndex: number   // next chunk to process (0-based)
-  videoUri: string | null     // LTX storage URI of accumulated video
-  checkpointUrl?: string      // Supabase Storage URL of last checkpoint (survives URI expiry)
+  currentChunkIndex: number
+  segmentUrls: string[]         // Supabase URLs: videos/{id}/segment-{i}.mp4
+  lastFrameUrl: string | null   // Public URL of most recent last-frame JPG
+  characterRefs?: {
+    authorA: CharacterRef
+    authorB: CharacterRef
+  }
   stepInProgress: boolean
-  stepStartedAt?: string      // ISO timestamp for stale lock detection
-  avgSecondsPerStep: number   // running average for time estimates
+  stepStartedAt?: string
+  avgSecondsPerStep: number
+  lastError?: string
+  lastErrorChunk?: number
 }
+
+const VIDEO_BUCKET = 'debate-video'
 
 function getServiceClient() {
   return createClient(
@@ -57,9 +74,6 @@ function isInternalCall(request: Request): boolean {
 
 /** Trigger the next pipeline step via self-invocation */
 async function triggerNextStep(sessionId: string) {
-  // Prefer the stable production URL over the per-deployment VERCEL_URL
-  // VERCEL_URL changes with each deploy (e.g. liberai-abc123.vercel.app)
-  // and can hit Deployment Protection. The production URL is always stable.
   const baseUrl =
     process.env.VERCEL_PROJECT_PRODUCTION_URL
       ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
@@ -74,7 +88,7 @@ async function triggerNextStep(sessionId: string) {
 
   try {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 30_000) // 30s timeout
+    const timeout = setTimeout(() => controller.abort(), 30_000)
 
     const res = await fetch(url, {
       method: 'POST',
@@ -120,15 +134,11 @@ export async function GET(
     const state = session.video_state as VideoState | null
     const totalChunks = state?.chunks?.length || 0
     const currentIndex = state?.currentChunkIndex || 0
-    const avgPerStep = state?.avgSecondsPerStep || 120
+    const avgPerStep = state?.avgSecondsPerStep || 90
 
-    // Estimated time remaining
     const remainingChunks = Math.max(0, totalChunks - currentIndex)
-    const estimatedSecondsRemaining = state?.stepInProgress
-      ? remainingChunks * avgPerStep  // include current step
-      : remainingChunks * avgPerStep
+    const estimatedSecondsRemaining = remainingChunks * avgPerStep
 
-    // Total video duration in seconds
     const videoDurationSeconds = state?.chunks
       ? state.chunks.reduce((sum, c) => sum + c.durationSeconds, 0)
       : 0
@@ -142,6 +152,7 @@ export async function GET(
       stepInProgress: state?.stepInProgress || false,
       estimatedSecondsRemaining: Math.round(estimatedSecondsRemaining),
       videoDurationSeconds,
+      segmentsCompleted: state?.segmentUrls?.length || 0,
     })
   } catch (err) {
     console.error('[Video] GET error:', err)
@@ -161,7 +172,6 @@ export async function POST(
   const { id } = await params
   const internal = isInternalCall(request)
 
-  // External calls need user auth; internal pipeline calls are pre-authorized
   if (!internal) {
     const auth = await resolveAuth(request)
     if (!auth) {
@@ -181,7 +191,6 @@ export async function POST(
       return NextResponse.json({ error: 'Debate not found' }, { status: 404 })
     }
 
-    // Already complete
     if (current.video_status === 'complete') {
       return NextResponse.json(
         { error: 'Video already generated. Use GET to retrieve.' },
@@ -198,7 +207,6 @@ export async function POST(
         : Infinity
 
       if (stepAge < 5 * 60 * 1000) {
-        // Active step — tell client to keep polling
         return NextResponse.json({
           status: 'generating',
           progress: current.video_progress || 0,
@@ -206,11 +214,10 @@ export async function POST(
           stepInProgress: true,
         }, { status: 202 })
       }
-      // Stale lock — fall through to retry
       console.warn(`[Video] [${id}] Stale step lock (${Math.round(stepAge / 1000)}s). Retrying.`)
     }
 
-    // ── STEP 0: First call — generate screenplay + start chain ──
+    // ── STEP 0: First call — screenplay + character refs + start chain ──
     if (!state) {
       if (current.status !== 'completed') {
         return NextResponse.json(
@@ -231,7 +238,7 @@ export async function POST(
         return NextResponse.json({ error: 'Session not found' }, { status: 404 })
       }
 
-      // Fetch book info
+      // Fetch book + author info
       const [{ data: bookAData }, { data: bookBData }] = await Promise.all([
         db.from('books').select('id, title, author_id').eq('id', session.book_a_id).single(),
         db.from('books').select('id, title, author_id').eq('id', session.book_b_id).single(),
@@ -245,6 +252,9 @@ export async function POST(
         (authors || []).map((a: { id: string; display_name: string }) => [a.id, a] as const),
       )
 
+      const authorAName = authorMap.get(bookAData?.author_id)?.display_name || 'Author A'
+      const authorBName = authorMap.get(bookBData?.author_id)?.display_name || 'Author B'
+
       const transcript = {
         session,
         rounds,
@@ -252,25 +262,65 @@ export async function POST(
         axiomsA: axioms.filter((a) => a.side === 'a'),
         axiomsB: axioms.filter((a) => a.side === 'b'),
         bookATitle: bookAData?.title || 'Book A',
-        bookAAuthor: authorMap.get(bookAData?.author_id)?.display_name || 'Author A',
+        bookAAuthor: authorAName,
         bookBTitle: bookBData?.title || 'Book B',
-        bookBAuthor: authorMap.get(bookBData?.author_id)?.display_name || 'Author B',
+        bookBAuthor: authorBName,
       }
 
-      // Generate screenplay (~10-30s LLM call)
+      // Generate screenplay
       console.log(`[Video] [${id}] Generating screenplay...`)
       const chunks = await generateScreenplay(transcript)
       const videoDuration = chunks.reduce((s, c) => s + c.durationSeconds, 0)
       console.log(`[Video] [${id}] Screenplay: ${chunks.length} scenes, ${videoDuration}s video`)
 
+      // Generate character reference portraits via Nano Banana 2
+      console.log(`[Video] [${id}] Generating character reference images...`)
+      const [refImageA, refImageB] = await Promise.all([
+        generateCharacterRefImage(authorAName),
+        generateCharacterRefImage(authorBName),
+      ])
+
+      // Upload ref images to Supabase Storage
+      const refPathA = `characters/${id}/author-a.png`
+      const refPathB = `characters/${id}/author-b.png`
+
+      await Promise.all([
+        db.storage.from(VIDEO_BUCKET).upload(refPathA, refImageA, {
+          contentType: 'image/png', upsert: true,
+        }),
+        db.storage.from(VIDEO_BUCKET).upload(refPathB, refImageB, {
+          contentType: 'image/png', upsert: true,
+        }),
+      ])
+
+      const refUrlA = db.storage.from(VIDEO_BUCKET).getPublicUrl(refPathA).data.publicUrl
+      const refUrlB = db.storage.from(VIDEO_BUCKET).getPublicUrl(refPathB).data.publicUrl
+
+      console.log(`[Video] [${id}] Character refs uploaded: AuthorA=${refUrlA.slice(-40)}, AuthorB=${refUrlB.slice(-40)}`)
+
+      const characterRefs = {
+        authorA: {
+          name: authorAName,
+          refImageUrl: refUrlA,
+          description: `Distinguished intellectual and author of "${bookAData?.title || 'Book A'}"`,
+        },
+        authorB: {
+          name: authorBName,
+          refImageUrl: refUrlB,
+          description: `Distinguished intellectual and author of "${bookBData?.title || 'Book B'}"`,
+        },
+      }
+
       // Initialize pipeline state
       const initialState: VideoState = {
         chunks,
         currentChunkIndex: 0,
-        videoUri: null,
+        segmentUrls: [],
+        lastFrameUrl: null,
+        characterRefs,
         stepInProgress: true,
         stepStartedAt: new Date().toISOString(),
-        avgSecondsPerStep: 120,
+        avgSecondsPerStep: 90,
       }
 
       await db
@@ -282,7 +332,7 @@ export async function POST(
         })
         .eq('id', id)
 
-      // Process first chunk in background — chain continues automatically
+      // Process segments in background
       after(async () => {
         await runStep(id, initialState)
       })
@@ -291,22 +341,20 @@ export async function POST(
         status: 'generating',
         progress: 1,
         total: chunks.length + 1,
-        message: `Screenplay ready (${chunks.length} scenes, ${Math.round(videoDuration / 60)} min video). Rendering started.`,
-        estimatedSecondsRemaining: chunks.length * 120,
+        message: `Screenplay ready (${chunks.length} scenes, ${Math.round(videoDuration / 60)} min video). Character refs generated. Rendering started.`,
+        estimatedSecondsRemaining: chunks.length * 90,
         videoDurationSeconds: videoDuration,
       })
     }
 
     // ── STEP N: Continue pipeline (internal chain or retry) ──
     if (state.currentChunkIndex >= state.chunks.length) {
-      // All chunks done — shouldn't reach here normally
       return NextResponse.json({
         status: 'generating',
         message: 'Finalizing...',
       })
     }
 
-    // Mark step in progress
     const stepState: VideoState = {
       ...state,
       stepInProgress: true,
@@ -316,12 +364,11 @@ export async function POST(
     await db
       .from('debate_sessions')
       .update({
-        video_status: 'generating', // reset from 'failed' on retry
+        video_status: 'generating',
         video_state: stepState,
       })
       .eq('id', id)
 
-    // Process chunk in background
     after(async () => {
       await runStep(id, stepState)
     })
@@ -341,22 +388,37 @@ export async function POST(
   }
 }
 
-// ─── Multi-Chunk Step Runner ─────────────────────────────────────
-// Processes as many chunks as possible within the invocation time limit
-// (maxDuration=800s, budget ~700s). Only self-chains if chunks remain.
-// This eliminates the fragile one-chunk-per-invocation pattern.
+// ─── V3 Segment Loop ────────────────────────────────────────────
+// Processes as many segments as possible within the invocation time limit.
+// Each segment: Kling V3 API call → extract last frame → upload both → checkpoint.
+// Self-chains if segments remain after time budget.
 
-const INVOCATION_BUDGET_MS = 700_000 // Leave 100s buffer before 800s timeout
+const INVOCATION_BUDGET_MS = 700_000
 
 async function runStep(sessionId: string, state: VideoState) {
   const db = getServiceClient()
-  const videoService = createVideoService()
+  const klingV3 = new KlingV3VideoService()
   const invocationStart = Date.now()
 
   let currentIndex = state.currentChunkIndex
-  let currentVideoUri = state.videoUri
-  let currentCheckpointUrl = state.checkpointUrl || undefined
+  let segmentUrls = [...state.segmentUrls]
+  let lastFrameUrl = state.lastFrameUrl
   let avgSeconds = state.avgSecondsPerStep
+
+  // Build Kling elements from character refs
+  const elements: KlingElement[] = []
+  if (state.characterRefs) {
+    elements.push({
+      name: 'AuthorA',
+      description: state.characterRefs.authorA.description,
+      element_input_urls: [state.characterRefs.authorA.refImageUrl],
+    })
+    elements.push({
+      name: 'AuthorB',
+      description: state.characterRefs.authorB.description,
+      element_input_urls: [state.characterRefs.authorB.refImageUrl],
+    })
+  }
 
   try {
     const { chunks } = state
@@ -367,73 +429,83 @@ async function runStep(sessionId: string, state: VideoState) {
       const isLast = currentIndex === chunks.length - 1
       const chunkStart = Date.now()
 
-      // Time budget check: can we fit another chunk? (skip for first chunk)
+      // Time budget check (skip for first chunk)
       if (!isFirst) {
         const elapsed = Date.now() - invocationStart
-        const estimatedChunkTime = avgSeconds * 1000 + 30_000 // avg + 30s buffer
+        const estimatedChunkTime = avgSeconds * 1000 + 30_000
         if (elapsed + estimatedChunkTime > INVOCATION_BUDGET_MS) {
-          console.log(`[Video] [${sessionId}] Time budget reached (${Math.round(elapsed / 1000)}s elapsed). Chaining for remaining ${chunks.length - currentIndex} chunks.`)
+          console.log(`[Video] [${sessionId}] Time budget reached (${Math.round(elapsed / 1000)}s). Chaining for remaining ${chunks.length - currentIndex} segments.`)
           break
         }
       }
 
       let mp4Buffer: Buffer
 
-      if (isFirst) {
-        console.log(`[Video] [${sessionId}] Chunk 0/${chunks.length}: generateFirst (${chunk.durationSeconds}s)`)
-        mp4Buffer = await videoService.generateFirst({
+      if (isFirst || !lastFrameUrl) {
+        // First segment: text2video
+        console.log(`[Video] [${sessionId}] Segment ${currentIndex}/${chunks.length}: text2video (${chunk.durationSeconds}s)`)
+        mp4Buffer = await klingV3.text2video({
           prompt: chunk.videoPrompt,
           duration: chunk.durationSeconds,
-          cameraMotion: chunk.cameraMotion,
+          elements,
         })
-        console.log(`[Video] [${sessionId}] First chunk: ${mp4Buffer.length} bytes`)
-        // For Kling, the video_id is embedded in the buffer for use in extend
-        const firstKlingId = (mp4Buffer as Buffer & { klingVideoId?: string }).klingVideoId
-        if (firstKlingId) {
-          currentVideoUri = firstKlingId
-        }
       } else {
-        if (!currentVideoUri) throw new Error(`No videoUri for extend at chunk ${currentIndex}`)
-        console.log(`[Video] [${sessionId}] Chunk ${currentIndex}/${chunks.length}: extend (${chunk.durationSeconds}s)`)
-        try {
-          mp4Buffer = await videoService.extendVideo({
-            videoUri: currentVideoUri,
-            prompt: chunk.videoPrompt,
-            duration: chunk.durationSeconds,
-          })
-        } catch (extendErr) {
-          // Recover from checkpoint — provider-specific
-          const cpUrl = currentCheckpointUrl || state.checkpointUrl
-          if (!cpUrl) throw extendErr
-          console.warn(`[Video] [${sessionId}] Extend failed, recovering from checkpoint...`)
-          try {
-            const cpRes = await fetch(cpUrl)
-            if (!cpRes.ok) throw extendErr
-            const cpBuffer = Buffer.from(await cpRes.arrayBuffer())
-            currentVideoUri = await videoService.uploadVideo(cpBuffer)
-            console.log(`[Video] [${sessionId}] Fresh URI obtained, retrying extend...`)
-            mp4Buffer = await videoService.extendVideo({
-              videoUri: currentVideoUri,
-              prompt: chunk.videoPrompt,
-              duration: chunk.durationSeconds,
-            })
-          } catch {
-            // If uploadVideo is not supported (e.g. Kling), re-throw original error
-            throw extendErr
-          }
-        }
-        console.log(`[Video] [${sessionId}] Chunk ${currentIndex}: ${mp4Buffer.length} bytes`)
+        // Subsequent segments: image2video with last frame as seed
+        console.log(`[Video] [${sessionId}] Segment ${currentIndex}/${chunks.length}: image2video (${chunk.durationSeconds}s)`)
+        mp4Buffer = await klingV3.image2video({
+          prompt: chunk.videoPrompt,
+          duration: chunk.durationSeconds,
+          elements,
+          imageUrl: lastFrameUrl,
+        })
       }
+
+      console.log(`[Video] [${sessionId}] Segment ${currentIndex}: ${Math.round(mp4Buffer.length / 1024)}KB`)
+
+      // Extract last frame for next segment's seed
+      const frameBuffer = await extractLastFrame(mp4Buffer)
+
+      // Upload segment + frame to Supabase Storage
+      const segPath = `videos/${sessionId}/segment-${currentIndex}.mp4`
+      const framePath = `videos/${sessionId}/frame-${currentIndex}.jpg`
+
+      await Promise.all([
+        db.storage.from(VIDEO_BUCKET).upload(segPath, mp4Buffer, {
+          contentType: 'video/mp4', upsert: true,
+        }),
+        db.storage.from(VIDEO_BUCKET).upload(framePath, frameBuffer, {
+          contentType: 'image/jpeg', upsert: true,
+        }),
+      ])
+
+      const segUrl = db.storage.from(VIDEO_BUCKET).getPublicUrl(segPath).data.publicUrl
+      const frameUrl = db.storage.from(VIDEO_BUCKET).getPublicUrl(framePath).data.publicUrl
+
+      segmentUrls.push(segUrl)
+      lastFrameUrl = frameUrl
 
       const chunkDuration = Math.round((Date.now() - chunkStart) / 1000)
       avgSeconds = Math.round(
         (avgSeconds * currentIndex + chunkDuration) / (currentIndex + 1),
       )
 
+      currentIndex += 1
+
       if (isLast) {
-        // ── Finalize: upload to Supabase Storage + build timeline ──
-        console.log(`[Video] [${sessionId}] Final chunk done. Uploading to storage (${mp4Buffer.length} bytes)...`)
-        const videoUrl = await uploadVideoToStorage(mp4Buffer, sessionId)
+        // ── Finalize: download all segments → concatenate → upload final ──
+        console.log(`[Video] [${sessionId}] All ${segmentUrls.length} segments done. Concatenating...`)
+
+        const segmentBuffers: Buffer[] = []
+        for (const url of segmentUrls) {
+          const res = await fetch(url)
+          if (!res.ok) throw new Error(`Failed to download segment: ${url}`)
+          segmentBuffers.push(Buffer.from(await res.arrayBuffer()))
+        }
+
+        const finalVideo = await concatenateVideos(segmentBuffers)
+        console.log(`[Video] [${sessionId}] Concatenated → ${Math.round(finalVideo.length / 1024 / 1024)}MB`)
+
+        const videoUrl = await uploadVideoToStorage(finalVideo, sessionId)
         const timeline = buildTimeline(chunks)
 
         await db
@@ -445,45 +517,20 @@ async function runStep(sessionId: string, state: VideoState) {
             video_timeline: timeline,
             video_state: {
               ...state,
-              currentChunkIndex: currentIndex + 1,
-              videoUri: currentVideoUri,
+              currentChunkIndex: currentIndex,
+              segmentUrls,
+              lastFrameUrl,
               stepInProgress: false,
               avgSecondsPerStep: avgSeconds,
             },
           })
           .eq('id', sessionId)
 
-        console.log(`[Video] [${sessionId}] ✓ Pipeline complete (${Math.round((Date.now() - invocationStart) / 1000)}s): ${videoUrl}`)
-        return // All done!
+        console.log(`[Video] [${sessionId}] Pipeline complete (${Math.round((Date.now() - invocationStart) / 1000)}s): ${videoUrl}`)
+        return
       }
 
-      // ── Prepare for next extend ──
-      // Kling: video_id is embedded in the buffer by the adapter.
-      // LTX: upload the buffer to get a fresh storage URI.
-      const klingVideoId = (mp4Buffer as Buffer & { klingVideoId?: string }).klingVideoId
-      if (klingVideoId) {
-        currentVideoUri = klingVideoId
-        console.log(`[Video] [${sessionId}] Using Kling video_id=${klingVideoId} for next extend`)
-      } else {
-        console.log(`[Video] [${sessionId}] Uploading to provider for next extend...`)
-        currentVideoUri = await videoService.uploadVideo(mp4Buffer)
-      }
-
-      // Save checkpoint to Supabase Storage (survives provider URI/ID expiry)
-      const checkpointPath = `checkpoints/${sessionId}.mp4`
-      await db.storage.from('debate-video').upload(checkpointPath, mp4Buffer, {
-        contentType: 'video/mp4',
-        upsert: true,
-      })
-      const { data: { publicUrl } } = db.storage
-        .from('debate-video')
-        .getPublicUrl(checkpointPath)
-      currentCheckpointUrl = publicUrl
-      console.log(`[Video] [${sessionId}] Checkpoint saved (${Math.round(mp4Buffer.length / 1024 / 1024)}MB)`)
-
-      currentIndex += 1
-
-      // Update progress in DB after each chunk
+      // Update progress checkpoint
       await db
         .from('debate_sessions')
         .update({
@@ -491,8 +538,8 @@ async function runStep(sessionId: string, state: VideoState) {
           video_state: {
             ...state,
             currentChunkIndex: currentIndex,
-            videoUri: currentVideoUri,
-            checkpointUrl: currentCheckpointUrl,
+            segmentUrls,
+            lastFrameUrl,
             stepInProgress: true,
             stepStartedAt: new Date().toISOString(),
             avgSecondsPerStep: avgSeconds,
@@ -500,35 +547,33 @@ async function runStep(sessionId: string, state: VideoState) {
         })
         .eq('id', sessionId)
 
-      console.log(`[Video] [${sessionId}] Chunk ${currentIndex - 1} done (${chunkDuration}s, avg=${avgSeconds}s). ${chunks.length - currentIndex} remaining.`)
+      console.log(`[Video] [${sessionId}] Segment ${currentIndex - 1} done (${chunkDuration}s, avg=${avgSeconds}s). ${chunks.length - currentIndex} remaining.`)
     }
 
-    // ── If we broke out of the loop (time budget), self-chain for the rest ──
+    // ── Time budget reached — self-chain for remaining segments ──
     if (currentIndex < chunks.length) {
-      // Mark not in progress so the next POST can pick it up
       await db
         .from('debate_sessions')
         .update({
           video_state: {
             ...state,
             currentChunkIndex: currentIndex,
-            videoUri: currentVideoUri,
-            checkpointUrl: currentCheckpointUrl,
+            segmentUrls,
+            lastFrameUrl,
             stepInProgress: false,
             avgSecondsPerStep: avgSeconds,
           },
         })
         .eq('id', sessionId)
 
-      console.log(`[Video] [${sessionId}] Self-chaining for chunks ${currentIndex}-${chunks.length - 1}...`)
+      console.log(`[Video] [${sessionId}] Self-chaining for segments ${currentIndex}-${chunks.length - 1}...`)
       await triggerNextStep(sessionId)
     }
   } catch (err) {
     const errMsg = (err as Error)?.message || String(err)
-    console.error(`[Video] [${sessionId}] Step failed at chunk ${currentIndex}:`, errMsg)
+    console.error(`[Video] [${sessionId}] Step failed at segment ${currentIndex}:`, errMsg)
     console.error(`[Video] [${sessionId}] Stack:`, (err as Error)?.stack)
 
-    // Save CURRENT progress (not original state) so retries can resume
     await db
       .from('debate_sessions')
       .update({
@@ -536,8 +581,8 @@ async function runStep(sessionId: string, state: VideoState) {
         video_state: {
           ...state,
           currentChunkIndex: currentIndex,
-          videoUri: currentVideoUri,
-          checkpointUrl: currentCheckpointUrl,
+          segmentUrls,
+          lastFrameUrl,
           avgSecondsPerStep: avgSeconds,
           stepInProgress: false,
           lastError: errMsg.slice(0, 500),

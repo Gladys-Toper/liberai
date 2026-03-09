@@ -10,6 +10,8 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { createHmac } from 'crypto'
+import { google } from '@ai-sdk/google'
+import { generateImage } from 'ai'
 
 // ─── Public Types ────────────────────────────────────────────────
 
@@ -45,6 +47,7 @@ export interface IVideoService {
 
 export function createVideoService(): IVideoService {
   const provider = process.env.VIDEO_PROVIDER || 'ltx'
+  console.log(`[VideoService] Provider: "${provider}" (env: "${process.env.VIDEO_PROVIDER}")`)
   switch (provider) {
     case 'kling':
       return new KlingVideoService()
@@ -57,10 +60,10 @@ export function createVideoService(): IVideoService {
 
 // ─── Kling Adapter ──────────────────────────────────────────────
 
-const KLING_BASE = 'https://api-singapore.klingai.com'
+export const KLING_BASE = 'https://api-singapore.klingai.com'
 
 /** Generate a JWT token for Kling API auth (HS256, no external deps) */
-function generateKlingJwt(accessKey: string, secretKey: string): string {
+export function generateKlingJwt(accessKey: string, secretKey: string): string {
   const header = { alg: 'HS256', typ: 'JWT' }
   const now = Math.floor(Date.now() / 1000)
   const payload = { iss: accessKey, exp: now + 1800, nbf: now - 5 }
@@ -118,7 +121,6 @@ class KlingVideoService implements IVideoService {
       duration,
       aspect_ratio: '16:9',
       mode: 'std',
-      sound: 'on',
     }
 
     console.log(`[Kling] text2video: "${params.prompt.slice(0, 80)}..." (${duration}s)`)
@@ -542,6 +544,34 @@ function sanitizePromptForContentFilter(prompt: string): string {
   }
 
   return sanitized
+}
+
+// ─── Character Reference Image Generation ───────────────────────
+
+/**
+ * Generate a photorealistic portrait for a debate author using Nano Banana 2.
+ * Used as Kling V3 element reference for character consistency across segments.
+ */
+export async function generateCharacterRefImage(
+  authorName: string,
+): Promise<Buffer> {
+  console.log(`[CharRef] Generating reference portrait for ${authorName}...`)
+  const { images } = await generateImage({
+    model: google.image('gemini-3.1-flash-image-preview'),
+    prompt: `Photorealistic portrait photograph of ${authorName}, distinguished intellectual and author. Professional studio headshot with dramatic side lighting. The subject wears formal academic attire, looking directly at the camera with an intense, thoughtful expression. Sharp focus, high detail, neutral dark background. Cinematic 35mm film quality.`,
+    aspectRatio: '1:1',
+    providerOptions: {
+      google: { personGeneration: 'allow_adult' as const },
+    },
+  })
+
+  if (!images || images.length === 0 || !images[0].uint8Array) {
+    throw new Error(`Character reference image generation failed for ${authorName}`)
+  }
+
+  const buffer = Buffer.from(images[0].uint8Array)
+  console.log(`[CharRef] Generated ${authorName} portrait: ${Math.round(buffer.length / 1024)}KB`)
+  return buffer
 }
 
 // ─── Supabase Storage Helper ─────────────────────────────────────
